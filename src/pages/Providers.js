@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
-import { rate, num, money, date, cycleLabel, METRIC_LABELS, PAYMENT_TYPE_LABELS, LEASE_LABELS } from '../format';
-import { ActiveBadge, Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, PageHead, StatusBadge, useLoad, useToast } from '../components/ui';
+import { rate, num, money, date, todayLocal, cycleLabel, METRIC_LABELS, PAYMENT_TYPE_LABELS, LEASE_LABELS } from '../format';
+import { ActiveBadge, Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, Modal, PageHead, StatusBadge, useLoad, useToast } from '../components/ui';
 import { TierTable, planSummary } from './Plans';
 import PortalAccess from '../components/PortalAccess';
 import BulkImport from '../components/BulkImport';
@@ -11,7 +11,7 @@ const leaseText = (l) => (!l || l.frequency === 'NONE' || !l.amount ? 'None' : `
 
 // List rows carry the raw provider; older providers keep their lease on the provider itself.
 function leaseSummary(p) {
-  const ops = p.operators?.length ? p.operators.filter((o) => o.status === 'ACTIVE') : [{ liftLease: p.liftLease }];
+  const ops = p.operators?.length ? p.operators.filter((o) => o.status === 'ACTIVE' && !o.transferredTo) : [{ liftLease: p.liftLease }];
   const leased = ops.filter((o) => o.liftLease && o.liftLease.frequency !== 'NONE' && o.liftLease.amount);
   if (ops.length === 1) return leaseText(ops[0].liftLease);
   return leased.length ? `${leased.length} of ${ops.length} operators` : 'None';
@@ -77,7 +77,7 @@ export function ProviderList() {
                       <tr key={p._id} className="clickable" onClick={() => navigate(`/providers/${p._id}`)}>
                         <td><div className="strong">{p.name}</div><div className="muted small">#{p.providerNumber || '—'}</div></td>
                         <td>{p.division ? `DIV ${p.division.divisionNumber}` : '—'}</td>
-                        <td>{p.operatorName || '—'}{p.operators?.filter((o) => o.status === 'ACTIVE').length > 1 && <div className="muted small">{p.operators.filter((o) => o.status === 'ACTIVE').length} operators</div>}</td>
+                        <td>{p.operatorName || '—'}{p.operators?.filter((o) => o.status === 'ACTIVE' && !o.transferredTo).length > 1 && <div className="muted small">{p.operators.filter((o) => o.status === 'ACTIVE' && !o.transferredTo).length} operators</div>}</td>
                         <td className="mono">{p.routes.join(', ') || <span className="muted">—</span>}</td>
                         <td>{p.planName || <Badge tone="bad">No plan</Badge>} {override && <Badge tone="warn">Override</Badge>}</td>
                         <td className="nowrap">{leaseSummary(p)}</td>
@@ -109,10 +109,61 @@ function SettingRow({ label, setting, render = (v) => v }) {
   );
 }
 
+// Move an operator to another provider from an effective date. Report days before it stay
+// with this provider; days from it go to the new one — even inside a cycle.
+function MoveOperator({ provider, operator, onClose, onDone }) {
+  const toast = useToast();
+  const [form, setForm] = useState({ toProviderId: '', effectiveDate: todayLocal(), note: '' });
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const others = useLoad(() => api.get('/providers', { divisionId: provider.divisionId, status: 'ACTIVE' }), [provider.divisionId]);
+  const target = others.data?.find((x) => x._id === form.toProviderId);
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post(`/providers/${provider._id}/operators/${operator.id}/transfer`, form);
+      toast(`${operator.name} moves to ${target?.name} from ${date(form.effectiveDate)}`);
+      onDone();
+    } catch (e) {
+      setError(e);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={`Move ${operator.name} to another provider`} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={busy || !form.toProviderId || !form.effectiveDate} onClick={submit}>{busy ? 'Moving…' : 'Move operator'}</button></>}>
+      <div className="stack">
+        <p className="small">
+          {operator.name} keeps route <span className="mono">{operator.routes.join(', ') || '—'}</span>, their contracted hours and lift lease.
+          Performance before the effective date stays with <strong>{provider.name}</strong>; from that date it is paid to the new provider — even in the middle of a cycle.
+          A cycle split by the move charges each lease week to whoever has the operator on the week’s first day.
+        </p>
+        <Field label="Moving to" htmlFor="mv-to">
+          <select id="mv-to" value={form.toProviderId} onChange={(e) => setForm({ ...form, toProviderId: e.target.value })}>
+            <option value="">Choose a provider…</option>
+            {(others.data || []).filter((x) => x._id !== provider._id).map((x) => <option key={x._id} value={x._id}>{x.name}{x.providerNumber ? ` (#${x.providerNumber})` : ''}</option>)}
+          </select>
+        </Field>
+        <Field label="Effective date (first day with the new provider)" htmlFor="mv-date">
+          <input id="mv-date" type="date" value={form.effectiveDate} onChange={(e) => setForm({ ...form, effectiveDate: e.target.value })} />
+        </Field>
+        <Field label="Note (optional)" htmlFor="mv-note">
+          <textarea id="mv-note" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="e.g. Operator switched providers at their request" />
+        </Field>
+        <p className="muted small">Open VDPs for both providers are marked for recalculation. VDPs already approved for dates on or after the move must be reopened first.</p>
+        <ErrorAlert error={error} />
+      </div>
+    </Modal>
+  );
+}
+
 export function ProviderProfile() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { data: p, loading, error } = useLoad(() => api.get(`/providers/${id}`), [id]);
+  const { data: p, loading, error, reload } = useLoad(() => api.get(`/providers/${id}`), [id]);
+  const [moving, setMoving] = useState(null);
   const division = useLoad(() => (p ? api.get(`/divisions/${p.divisionId}`) : Promise.resolve(null)), [p?.divisionId]);
   const vdps = useLoad(() => (p ? api.get('/vdps', { providerId: p._id }) : Promise.resolve([])), [p?._id]);
 
@@ -177,21 +228,31 @@ export function ProviderProfile() {
       <Card title="Operators" hint="Each operator is measured against their own contracted hours; the provider is paid the total." body={false}>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Operator</th><th>Route / run</th><th>Contracted hours</th><th>Lift lease</th><th>Status</th></tr></thead>
+            <thead><tr><th>Operator</th><th>Route / run</th><th>Contracted hours</th><th>Lift lease</th><th>Status</th><th /></tr></thead>
             <tbody>
               {(p.operators || []).map((o) => (
-                <tr key={o.id || o.name}>
-                  <td className="strong">{o.name}</td>
+                <tr key={o.id || o.name} className={o.transferredTo ? 'muted' : ''}>
+                  <td>
+                    <div className="strong">{o.name}</div>
+                    {o.transferredFrom && <div className="muted small">From {date(o.transferredFrom.effectiveDate)} · moved from <Link to={`/providers/${o.transferredFrom.providerId}`}>{o.transferredFrom.providerName}</Link></div>}
+                    {o.transferredTo && <div className="muted small">Until {date(o.endDate)} · moved to <Link to={`/providers/${o.transferredTo.providerId}`}>{o.transferredTo.providerName}</Link></div>}
+                  </td>
                   <td className="mono">{o.routes.join(', ') || <Badge tone="warn">No route</Badge>}</td>
                   <td>{o.contractedHours ? <>{num(o.contractedHours)} / week <span className="source-tag source-override">Operator</span></> : s?.contractedHours.value ? <>{num(s.contractedHours.value)} / week <span className="source-tag source-plan">{s.contractedHours.source === 'PLAN' ? 'Plan' : 'Provider'}</span></> : '—'}</td>
                   <td className="nowrap">{leaseText(o.liftLease)}</td>
-                  <td><ActiveBadge status={o.status} /></td>
+                  <td>{o.transferredTo ? <Badge>Moved</Badge> : <ActiveBadge status={o.status} />}</td>
+                  <td className="num">
+                    {o.status === 'ACTIVE' && !o.transferredTo && (
+                      <button className="btn btn-ghost btn-sm" onClick={() => setMoving(o)}>Move to another provider</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </Card>
+      {moving && <MoveOperator provider={p} operator={moving} onClose={() => setMoving(null)} onDone={() => { setMoving(null); reload(); }} />}
       <div style={{ marginTop: 16 }} />
       <PortalAccess provider={p} />
       <div style={{ marginTop: 16 }} />
@@ -231,6 +292,7 @@ const operatorForm = (o) => ({
   status: o.status || 'ACTIVE',
   contractedHours: o.contractedHours || '',
   liftLease: { amount: o.liftLease?.amount || '', frequency: o.liftLease?.frequency || 'NONE' },
+  transferredFrom: o.transferredFrom || null, // shown only; dates are set by "Move to another provider"
 });
 
 function OperatorsEditor({ operators, onChange, planHours }) {
@@ -246,7 +308,10 @@ function OperatorsEditor({ operators, onChange, planHours }) {
           <tbody>
             {operators.map((o, i) => (
               <tr key={i}>
-                <td><input aria-label={`Operator ${i + 1} name`} value={o.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="Lisa Moore" /></td>
+                <td>
+                  <input aria-label={`Operator ${i + 1} name`} value={o.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="Lisa Moore" />
+                  {o.transferredFrom && <div className="muted small">From {date(o.transferredFrom.effectiveDate)} (moved from {o.transferredFrom.providerName})</div>}
+                </td>
                 <td><input aria-label={`Operator ${i + 1} routes`} value={o.routes} onChange={(e) => update(i, { routes: e.target.value })} placeholder="918" style={{ width: 90 }} /></td>
                 <td><input aria-label={`Operator ${i + 1} contracted hours`} value={o.contractedHours} onChange={(e) => update(i, { contractedHours: e.target.value })} placeholder={planHours ? `Plan: ${num(planHours)}` : 'Plan'} style={{ width: 90 }} /></td>
                 <td>
@@ -288,16 +353,21 @@ export function ProviderEdit() {
 
   useEffect(() => {
     if (!id) { setForm(emptyProvider); return; }
-    api.get(`/providers/${id}`).then((p) => setForm({
-      ...emptyProvider, ...p,
-      planId: p.planId || '',
-      operators: p.operators?.length ? p.operators.map(operatorForm) : [blankOperator()],
-      overrides: {
-        contractedHours: p.overrides?.contractedHours || '', basePay: p.overrides?.basePay || '',
-        bonusRate: p.overrides?.bonusRate || '', tuiEligibility: p.overrides?.tuiEligibility || 'INHERIT',
-      },
-      contact: { ...emptyProvider.contact, ...(p.contact || {}) },
-    })).catch(setError);
+    api.get(`/providers/${id}`).then((p) => {
+      // Operators who moved to another provider are kept by the server and not edited here.
+      const current = (p.operators || []).filter((o) => !o.transferredTo);
+      setForm({
+        ...emptyProvider, ...p,
+        planId: p.planId || '',
+        movedAway: (p.operators || []).filter((o) => o.transferredTo),
+        operators: current.length ? current.map(operatorForm) : [blankOperator()],
+        overrides: {
+          contractedHours: p.overrides?.contractedHours || '', basePay: p.overrides?.basePay || '',
+          bonusRate: p.overrides?.bonusRate || '', tuiEligibility: p.overrides?.tuiEligibility || 'INHERIT',
+        },
+        contact: { ...emptyProvider.contact, ...(p.contact || {}) },
+      });
+    }).catch(setError);
   }, [id]);
 
   useEffect(() => {
@@ -314,8 +384,8 @@ export function ProviderEdit() {
     setBusy(true);
     setError(null);
     try {
-      const { routes, operatorName, liftLease, ...body } = form;
-      body.operators = form.operators.filter((o) => o.name.trim() || o.routes.trim());
+      const { routes, operatorName, liftLease, movedAway, ...body } = form;
+      body.operators = form.operators.filter((o) => o.name.trim() || o.routes.trim()).map(({ transferredFrom, ...o }) => o);
       const saved = id ? await api.put(`/providers/${id}`, body) : await api.post('/providers', body);
       toast('Provider saved');
       navigate(`/providers/${saved._id}`);
@@ -353,6 +423,11 @@ export function ProviderEdit() {
 
         <Card title="Operators" hint="The provider is the one who gets paid. Add each operator (driver) who works for them.">
           <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} />
+          {form.movedAway?.length > 0 && (
+            <p className="muted small" style={{ marginTop: 8 }}>
+              Moved to another provider (kept for earlier cycles): {form.movedAway.map((o) => `${o.name} → ${o.transferredTo.providerName} from ${date(o.transferredTo.effectiveDate)}`).join('; ')}.
+            </p>
+          )}
         </Card>
 
         <Card title="How they are paid">

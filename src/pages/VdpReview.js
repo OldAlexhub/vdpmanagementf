@@ -159,7 +159,7 @@ function AdjustmentsCard({ vdp, types, editable, onChanged }) {
               <td className="strong">Lift lease <Badge tone="outline">Automatic</Badge></td>
               <td className="small">
                 {l.operators?.length > 1
-                  ? l.operators.map((o) => <div key={o.name}>{o.name}: {o.frequency === 'NONE' || !o.amount ? 'no lease' : `${money(o.amount)} / ${LEASE_LABELS[o.frequency]}`}</div>)
+                  ? l.operators.map((o) => <div key={o.name}>{o.name}: {o.frequency === 'NONE' || !o.amount ? 'no lease' : `${money(o.amount)} / ${LEASE_LABELS[o.frequency]}`}{o.weeksCharged && !l.weeksCharged && ` · ${num(o.weeksCharged)} week(s)`}</div>)
                   : l.frequency === 'NONE' || !l.amount ? 'No lift lease on profile' : `${money(l.amount)} / ${LEASE_LABELS[l.frequency]}`}
                 {l.weeksCharged && ` · ${num(l.weeksCharged)} week(s) charged`}
                 {l.note && <div className="muted">{l.note}</div>}
