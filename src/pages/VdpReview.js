@@ -1,0 +1,403 @@
+import { useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { api, downloadFile } from '../api';
+import ExplainCalculation from '../components/Explain';
+import { IssueList } from '../components/Issues';
+import { cycleLabel, deadlineLabel, todayLocal, date, dateTime, isNegative, money, num, pct, rate, METRIC_LABELS, PAYMENT_TYPE_LABELS, LEASE_LABELS } from '../format';
+import { Alert, Badge, Card, Confirm, Empty, ErrorAlert, Field, Loading, Modal, PageHead, StatusBadge, useLoad, useToast } from '../components/ui';
+
+const EDITABLE = ['DRAFT', 'NEEDS_REVIEW', 'READY'];
+const HISTORY_LABELS = {
+  PROCESSED: 'Calculated', RECALCULATED: 'Recalculated', APPROVED: 'Approved by Big Star', REOPENED: 'Reopened', PAID: 'Marked paid',
+  PROVIDER_APPROVED: 'Approved by provider', AUTO_APPROVED: 'Auto-approved',
+  ISSUE_RAISED: 'Provider reported an issue', ISSUE_ANSWERED: 'Issue answered (no change)',
+  ADJUSTMENT_ADDED: 'Adjustment added', ADJUSTMENT_REMOVED: 'Adjustment removed', LEASE_CHANGED: 'Lift lease changed',
+  EXCEPTION_ACKNOWLEDGED: 'Issue acknowledged',
+};
+
+function Row({ label, values, strong, muted, render = (x) => x }) {
+  return (
+    <tr>
+      <td className={muted ? 'muted' : ''}>{label}</td>
+      {values.map((v, i) => <td key={i} className={`num ${strong ? 'strong' : ''}`}>{render(v)}</td>)}
+    </tr>
+  );
+}
+
+export function PerformanceCard({ view }) {
+  const weeks = view.calculation?.weeks || view.performance?.weeks || [];
+  const perTrip = view.settings?.paymentType?.value === 'PER_TRIP';
+  const metric = METRIC_LABELS[view.settings?.performanceHourMetric?.value] || 'Hours';
+  const w = (k) => weeks.map((x) => x[k]);
+  const [showDays, setShowDays] = useState(false);
+  if (!weeks.length) return null;
+  return (
+    <Card title="Performance" hint={`Trips = Total Prov · Hours = ${metric} (Performance Report)`} body={false}
+      actions={view.performance?.days?.length > 0 && <button className="btn btn-sm no-print" onClick={() => setShowDays(!showDays)}>{showDays ? 'Hide' : 'Show'} daily detail</button>}>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr><th />{weeks.map((x) => <th key={x.weekNumber} className="num">Week {x.weekNumber}<div className="muted" style={{ textTransform: 'none', fontWeight: 400 }}>{date(x.start, 'md')} – {date(x.end, 'md')}</div></th>)}</tr>
+          </thead>
+          <tbody>
+            <Row label="Trips" values={w('trips')} render={num} />
+            <Row label={`Actual hours (${metric})`} values={w('actualHours')} render={num} strong />
+            {view.calculation && (
+              <>
+                <Row label="Contracted hours" values={w('contractedHours')} render={num} />
+                <Row label="Performance %" values={w('performancePercentage')} render={pct} />
+                <Row label="Incentive tier" values={w('tierLabel')} muted />
+                <Row label={perTrip ? 'Rate per trip' : 'Incentive rate'} values={w('incentiveRate')} render={rate} strong />
+                {!perTrip && <Row label="Core hours" values={w('corePaidHours')} render={num} />}
+                {!perTrip && <Row label="Bonus hours" values={w('bonusHours')} render={num} />}
+              </>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {showDays && (
+        <div className="table-wrap" style={{ borderTop: '1px solid var(--border)' }}>
+          <table className="table-compact">
+            <thead><tr><th>Date</th><th>Route</th><th>Week</th><th className="num">Trips</th><th className="num">{metric}</th></tr></thead>
+            <tbody>
+              {view.performance.days.map((d) => (
+                <tr key={d.date + d.route}><td>{date(d.date)}</td><td className="mono">{d.route}</td><td>{d.week}</td><td className="num">{num(d.trips)}</td><td className="num">{num(d.hours)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function EarningsCard({ calc, perTrip }) {
+  if (!calc) return null;
+  const weeks = calc.weeks;
+  return (
+    <Card title="Earnings" body={false}>
+      <table>
+        <thead><tr><th />{weeks.map((x) => <th key={x.weekNumber} className="num">Week {x.weekNumber}</th>)}</tr></thead>
+        <tbody>
+          <Row label={perTrip ? 'Trip earnings' : 'Core earnings'} values={weeks.map((x) => x.coreEarnings)} render={money} />
+          {!perTrip && <Row label="Bonus earnings" values={weeks.map((x) => x.bonusEarnings)} render={money} />}
+          <Row label="Week total" values={weeks.map((x) => x.weeklyEarnings)} render={money} strong />
+        </tbody>
+        <tfoot>
+          <tr><td>Gross VDP</td><td colSpan={weeks.length} className="num" style={{ fontSize: 16 }}>{money(calc.gross)}</td></tr>
+        </tfoot>
+      </table>
+    </Card>
+  );
+}
+
+function AdjustmentsCard({ vdp, types, editable, onChanged }) {
+  const [form, setForm] = useState({ type: 'FARES', amount: '', description: '', date: todayLocal() });
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(null);
+  const [lease, setLease] = useState(null);
+  const view = vdp.view;
+  const typeInfo = (k) => types.find((t) => t.key === k) || { label: k, direction: 'DEDUCTION' };
+  const add = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      onChanged(await api.post(`/vdps/${vdp._id}/adjustments`, form));
+      setForm({ ...form, amount: '', description: '' });
+    } catch (err) { setError(err); }
+    setBusy(false);
+  };
+  const leaseAmt = view.calculation?.lease;
+  const l = view.lease || {};
+  return (
+    <Card title="Adjustments" hint="Lift lease is automatic. Enter fares collected and anything else automation cannot know." body={false}>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Item</th><th>Description</th><th>Entered</th><th className="num">Amount</th><th /></tr></thead>
+          <tbody>
+            <tr>
+              <td className="strong">Lift lease <Badge tone="outline">Automatic</Badge></td>
+              <td className="small">
+                {l.frequency === 'NONE' || !l.amount ? 'No lift lease on profile' : `${money(l.amount)} / ${LEASE_LABELS[l.frequency]}`}
+                {l.weeksCharged && ` · ${num(l.weeksCharged)} week(s) charged`}
+                {l.note && <div className="muted">{l.note}</div>}
+              </td>
+              <td className="small muted">From provider profile</td>
+              <td className="num minus">{leaseAmt ? `−${money(leaseAmt)}` : '—'}</td>
+              <td className="num">{editable && l.frequency !== 'NONE' && <button className="btn btn-ghost btn-sm no-print" onClick={() => setLease({ weeksCharged: l.weeksCharged || '', note: '' })}>Change</button>}</td>
+            </tr>
+            {view.adjustments.map((a) => {
+              const t = typeInfo(a.type);
+              const add = t.direction === 'ADDITION';
+              return (
+                <tr key={a._id || a.createdAt}>
+                  <td className="strong">{t.label}</td>
+                  <td className="small">{a.description || '—'}</td>
+                  <td className="small muted">{date(a.date)} · {a.createdBy?.name}</td>
+                  <td className={`num ${add ? 'plus' : 'minus'}`}>{add ? '+' : '−'}{money(a.amount)}</td>
+                  <td className="num">{editable && <button className="btn btn-ghost btn-sm no-print" onClick={() => setRemoving(a)}>Remove</button>}</td>
+                </tr>
+              );
+            })}
+            {!view.adjustments.length && <tr><td colSpan={5} className="muted small">No fares or other adjustments entered.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {editable && (
+        <form className="card-body no-print" onSubmit={add} style={{ borderTop: '1px solid var(--border)' }}>
+          <div className="filters">
+            <Field label="Type" htmlFor="a-type">
+              <select id="a-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+                <optgroup label="Deductions">{types.filter((t) => t.direction === 'DEDUCTION').map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</optgroup>
+                <optgroup label="Additions">{types.filter((t) => t.direction === 'ADDITION').map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</optgroup>
+              </select>
+            </Field>
+            <Field label="Amount ($)" htmlFor="a-amt"><input id="a-amt" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="25.20" style={{ width: 110 }} /></Field>
+            <Field label="Description" htmlFor="a-desc"><input id="a-desc" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="e.g. 9 cash fares" /></Field>
+            <Field label="Date" htmlFor="a-date"><input id="a-date" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field>
+            <button className="btn btn-primary" type="submit" disabled={busy || !form.amount}>Add</button>
+          </div>
+          <p className="muted small" style={{ marginTop: 6 }}>Enter a positive amount — the type decides whether it is deducted or added.</p>
+          {error && <div style={{ marginTop: 8 }}><ErrorAlert error={error} /></div>}
+        </form>
+      )}
+      {removing && (
+        <Confirm title="Remove adjustment?" message={`${typeInfo(removing.type).label} of ${money(removing.amount)} will be removed and the VDP recalculated.`}
+          confirmLabel="Remove" tone="danger" onClose={() => setRemoving(null)}
+          onConfirm={async () => onChanged(await api.del(`/vdps/${vdp._id}/adjustments/${removing._id}`))} />
+      )}
+      {lease && (
+        <Modal title="Lift lease weeks charged" onClose={() => setLease(null)}
+          footer={<><button className="btn" onClick={() => setLease(null)}>Cancel</button>
+            <button className="btn btn-primary" onClick={async () => {
+              try { onChanged(await api.patch(`/vdps/${vdp._id}/lease`, lease)); setLease(null); } catch (e) { setLease({ ...lease, error: e }); }
+            }}>Save</button></>}>
+          <div className="stack">
+            <p className="small">Normally the lease is charged for every week in the cycle. Change it only for a partial cycle (e.g. provider started mid-cycle).</p>
+            <Field label="Weeks charged (blank = all weeks)" htmlFor="l-weeks"><input id="l-weeks" value={lease.weeksCharged} onChange={(e) => setLease({ ...lease, weeksCharged: e.target.value })} placeholder="2" /></Field>
+            <Field label="Reason" htmlFor="l-note"><textarea id="l-note" value={lease.note} onChange={(e) => setLease({ ...lease, note: e.target.value })} /></Field>
+            <ErrorAlert error={lease.error} />
+          </div>
+        </Modal>
+      )}
+    </Card>
+  );
+}
+
+export function NetCard({ vdp }) {
+  const c = vdp.view.calculation;
+  const line = (label, value, sign) => (
+    <tr><td>{label}</td><td className={`num ${sign === '-' ? 'minus' : sign === '+' ? 'plus' : ''}`}>{value && value !== '0.00' ? `${sign === '-' ? '−' : sign === '+' ? '+' : ''}${money(value)}` : money(value)}</td></tr>
+  );
+  return (
+    <div className="stack">
+      <div className="net-card">
+        <div className="net-label">Net VDP payment</div>
+        <div className={`net-value ${isNegative(c?.net) ? 'negative' : ''}`}>{c ? money(c.net) : '—'}</div>
+        <div className="net-meta">{vdp.view.cycle ? `Pays ${date(vdp.view.cycle.paymentDate, 'long')}` : ''}</div>
+      </div>
+      {c && (
+        <Card>
+          <table className="ledger">
+            <tbody>
+              {line('Week 1 earnings', c.weeks[0]?.weeklyEarnings)}
+              {line('Week 2 earnings', c.weeks[1]?.weeklyEarnings)}
+              <tr className="total"><td>Gross VDP</td><td className="num">{money(c.gross)}</td></tr>
+              {line('Lift lease', c.lease, '-')}
+              {line('Fares collected', c.fares, '-')}
+              {line('Other deductions', c.otherDeductions, '-')}
+              {line('Reimbursements', c.reimbursements, '+')}
+              {line('Other income', c.otherIncome, '+')}
+              <tr className="total"><td>Net VDP</td><td className="num" style={{ fontSize: 16 }}>{money(c.net)}</td></tr>
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function deadlineText(cycle) {
+  if (!cycle?.submissionDate) return 'The provider can approve it in their portal.';
+  const past = new Date(`${cycle.submissionDate}T23:59:59`) < new Date();
+  return past
+    ? `The Closed for Submission date (${date(cycle.submissionDate)}) has passed, so it will be auto-approved immediately.`
+    : `The provider has until the end of ${date(cycle.submissionDate, 'long')} (Closed for Submission) to approve; after that it is auto-approved.`;
+}
+
+function ProviderApprovalBanner({ vdp }) {
+  const a = vdp.providerApproval;
+  if (vdp.status === 'DISPUTED') {
+    return (
+      <Alert tone="bad">
+        <strong>The provider reported an issue.</strong> Auto-approval is paused until Big Star answers.
+        Answer with no change if the statement is correct, or reopen to correct it — the provider then reviews it again
+        (at least 48 hours, even after the Closed for Submission date).
+      </Alert>
+    );
+  }
+  if (vdp.status === 'APPROVED') {
+    return (
+      <Alert tone="warn">
+        <strong>Awaiting provider approval.</strong> Sent to the provider portal.
+        {vdp.providerDeadline ? <> Auto-approves after {deadlineLabel(vdp.view.cycle?.submissionDate)} (Closed for Submission) if the provider does not respond.</> : null}
+      </Alert>
+    );
+  }
+  if (!a?.method) return null;
+  return (
+    <Alert tone="ok">
+      <strong>{a.method === 'AUTO' ? 'Auto-approved' : `Approved by provider (${a.by?.name})`}</strong> on {dateTime(a.at)}
+      {a.method === 'AUTO' && ' — no response by the Closed for Submission date'}.
+      {vdp.status === 'PROCESSED' && ' Ready to be marked as paid.'}
+      {vdp.paidAt && <> Paid {dateTime(vdp.paidAt)} ({vdp.paidBy?.name}).</>}
+    </Alert>
+  );
+}
+
+export default function VdpReview() {
+  const { id } = useParams();
+  const toast = useToast();
+  const { data: vdp, loading, error, setData, reload } = useLoad(() => api.get(`/vdps/${id}`), [id]);
+  const types = useLoad(() => api.get('/vdps/adjustment-types'), []);
+  const [dialog, setDialog] = useState(null);
+  const [ack, setAck] = useState(null);
+  const [actionError, setActionError] = useState(null);
+
+  if (loading && !vdp) return <div className="page"><Loading /></div>;
+  if (error) return <div className="page"><ErrorAlert error={error} /></div>;
+
+  const v = vdp.view;
+  const editable = EDITABLE.includes(vdp.status);
+  const perTrip = v.settings?.paymentType?.value === 'PER_TRIP';
+  const act = async (fn, msg) => {
+    setActionError(null);
+    try { setData(await fn()); if (msg) toast(msg); } catch (e) { setActionError(e); reload(); }
+  };
+  const openIssues = editable ? vdp.exceptions : [];
+  const acked = new Map(vdp.acknowledgements.map((a) => [a.code, a]));
+
+  return (
+    <div className="page">
+      <PageHead
+        crumbs={<><Link to="/processing">VDP Processing</Link> / {v.provider?.name}</>}
+        title={<>{v.provider?.name} <StatusBadge status={vdp.status} /></>}
+        sub={`${v.provider?.operatorName || ''} · Route ${(v.provider?.routes || []).join(', ') || '—'} · ${cycleLabel(v.cycle)}`}
+        actions={<>
+          <button className="btn" onClick={() => downloadFile(`/vdps/${id}/statement.pdf`).catch((e) => toast(e.message, 'bad'))}>Download PDF</button>
+          {editable && <button className="btn" onClick={() => act(() => api.post(`/vdps/${id}/recalculate`), 'Recalculated')}>Recalculate</button>}
+          {editable && <button className="btn btn-success" disabled={vdp.status !== 'READY'} title={vdp.status !== 'READY' ? 'Resolve the issues first' : ''} onClick={() => setDialog('approve')}>Approve VDP</button>}
+          {vdp.status === 'DISPUTED' && <button className="btn" onClick={() => setDialog('answer')}>Answer — no change</button>}
+          {['APPROVED', 'DISPUTED', 'PROCESSED'].includes(vdp.status) && (
+            <button className={`btn ${vdp.status === 'DISPUTED' ? 'btn-primary' : ''}`} onClick={() => setDialog('reopen')}>
+              {vdp.status === 'DISPUTED' ? 'Reopen to correct' : 'Reopen'}
+            </button>
+          )}
+          {vdp.status === 'PROCESSED' && <button className="btn btn-primary" onClick={() => setDialog('paid')}>Mark paid</button>}
+        </>}
+      />
+
+      <div className="stack">
+        {v.source === 'SNAPSHOT' && <ProviderApprovalBanner vdp={vdp} />}
+        {vdp.issues?.length > 0 && (
+          <Card title="Provider issues" hint={vdp.status === 'DISPUTED'
+            ? 'Auto-approval is paused. Answer the provider, or reopen to correct the VDP and approve it again.'
+            : 'Issues the provider reported on this VDP.'}>
+            <IssueList issues={vdp.issues} staff />
+          </Card>
+        )}
+        {v.source === 'SNAPSHOT' && (
+          <Alert tone="info">
+            Approved by Big Star {dateTime(v.approvedAt)} ({v.approvedBy?.name}). These figures are a frozen snapshot of the rules and data used — later plan or profile changes do not affect them.
+          </Alert>
+        )}
+        {vdp.stale && editable && (
+          <Alert tone="warn" action={<button className="btn btn-sm" onClick={() => act(() => api.post(`/vdps/${id}/recalculate`), 'Recalculated')}>Recalculate now</button>}>
+            The report, plan or provider profile changed after this VDP was calculated.
+          </Alert>
+        )}
+        {actionError && <ErrorAlert error={actionError} />}
+        {openIssues.map((ex) => (
+          <Alert key={ex.code} tone={acked.has(ex.code) ? 'info' : 'bad'}
+            action={ex.acknowledgeable && editable && !acked.has(ex.code) && <button className="btn btn-sm" onClick={() => setAck(ex)}>Accept</button>}>
+            <strong>{acked.has(ex.code) ? 'Accepted: ' : 'Needs review: '}</strong>{ex.message}
+            {acked.has(ex.code) && <div className="small">“{acked.get(ex.code).note}” — {acked.get(ex.code).by?.name}</div>}
+          </Alert>
+        ))}
+
+        <Card>
+          <div className="kv">
+            <div><div className="k">Provider</div><div className="v">{v.provider?.name} <span className="muted small">#{v.provider?.providerNumber}</span></div></div>
+            <div><div className="k">Operator</div><div className="v">{v.provider?.operatorName || '—'}</div></div>
+            <div><div className="k">Division</div><div className="v">DIV {v.division?.divisionNumber} – {v.division?.name}</div></div>
+            <div><div className="k">Route</div><div className="v mono">{(v.provider?.routes || []).join(', ') || '—'}</div></div>
+            <div><div className="k">VDP cycle</div><div className="v">{cycleLabel(v.cycle)}</div></div>
+            <div><div className="k">VDP plan</div><div className="v">{v.plan ? <>{v.plan.name} <span className="muted small">v{v.plan.versionNumber} · {PAYMENT_TYPE_LABELS[v.settings?.paymentType?.value]}</span></> : '—'}</div></div>
+            <div><div className="k">TUI eligible</div><div className="v">{v.settings ? (v.settings.tuiEligible.value ? 'Yes' : 'No') : '—'}{v.settings?.tuiEligible.source === 'PROVIDER_OVERRIDE' && <span className="source-tag source-override"> · override</span>}</div></div>
+            <div><div className="k">Bonus rate</div><div className="v">{v.settings?.bonusEnabled.value ? rate(v.settings.bonusRate.value) : 'None'}</div></div>
+          </div>
+        </Card>
+
+        <div className="split">
+          <div className="stack">
+            {!v.calculation && !v.performance && <Card><Empty title="Not calculated">Resolve the issues above, then recalculate.</Empty></Card>}
+            <PerformanceCard view={v} />
+            <EarningsCard calc={v.calculation} perTrip={perTrip} />
+            <AdjustmentsCard vdp={vdp} types={types.data || []} editable={editable} onChanged={(d) => { setData(d); toast('VDP updated'); }} />
+            <ExplainCalculation calc={v.calculation} settings={v.settings} />
+          </div>
+          <div className="stack">
+            <NetCard vdp={vdp} />
+            <Card title="History" className="no-print">
+              <ul className="timeline">
+                {[...vdp.history].reverse().map((h, i) => (
+                  <li key={i}>
+                    <div><strong>{HISTORY_LABELS[h.action] || h.action}</strong> · {h.by?.name}</div>
+                    <div className="muted small">{dateTime(h.at)}</div>
+                    {h.reason && <div className="small">{h.reason}</div>}
+                    {h.previousSnapshot && <div className="small muted">Previously approved net: {money(h.previousSnapshot.net)}</div>}
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          </div>
+        </div>
+      </div>
+
+      {dialog === 'approve' && (
+        <Confirm title="Approve this VDP?" confirmLabel="Approve" tone="success"
+          message={<>
+            Net payment <strong>{money(v.calculation?.net)}</strong> to {v.provider?.name}. Approval freezes the calculation and sends the statement to the provider’s portal.
+            {' '}{deadlineText(v.cycle)}
+          </>}
+          onClose={() => setDialog(null)}
+          onConfirm={async () => {
+            const d = await api.post(`/vdps/${id}/approve`);
+            setData(d);
+            toast(d.status === 'PROCESSED' ? 'Approved — submission date has passed, so it was auto-approved' : 'Approved and sent to the provider');
+          }} />
+      )}
+      {dialog === 'answer' && (
+        <Confirm title="Answer the provider — no change" confirmLabel="Send answer" reason="Explain to the provider why the statement is correct"
+          message="The statement stays as it is and goes back to the provider for approval. They will see your answer and have at least 48 hours to approve."
+          onClose={() => setDialog(null)} onConfirm={async (message) => { setData(await api.post(`/vdps/${id}/issues/respond`, { message })); toast('Answer sent to the provider'); }} />
+      )}
+      {dialog === 'reopen' && (
+        <Confirm title={vdp.status === 'DISPUTED' ? 'Reopen to correct the provider’s issue' : 'Reopen approved VDP'} confirmLabel="Reopen" tone="danger"
+          reason={vdp.status === 'DISPUTED' ? 'What will be corrected? (the provider will see this)' : 'Why does this VDP need correcting?'}
+          message="The approved snapshot is kept in the history. The VDP will be recalculated with current data and must be approved again."
+          onClose={() => setDialog(null)} onConfirm={async (reason) => { setData(await api.post(`/vdps/${id}/reopen`, { reason })); toast('VDP reopened'); }} />
+      )}
+      {dialog === 'paid' && (
+        <Confirm title="Mark as paid?" confirmLabel="Mark paid" message={`Record that ${money(v.calculation?.net)} has been paid to ${v.provider?.name}. The provider will see it as paid. Paid VDPs cannot be reopened.`}
+          onClose={() => setDialog(null)} onConfirm={async () => { setData(await api.post(`/vdps/${id}/mark-paid`)); toast('Marked as paid'); }} />
+      )}
+      {ack && (
+        <Confirm title="Accept this issue?" confirmLabel="Accept" reason="Explain why this is acceptable" message={ack.message}
+          onClose={() => setAck(null)} onConfirm={async (note) => { setData(await api.post(`/vdps/${id}/acknowledge`, { code: ack.code, note })); }} />
+      )}
+    </div>
+  );
+}
