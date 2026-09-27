@@ -86,11 +86,15 @@ function UploadCard({ summary, onUploaded }) {
 function RouteRow({ m, providers, importId, onResolved }) {
   const [providerId, setProviderId] = useState(m.candidates?.[0]?.id || '');
   const [save, setSave] = useState(true);
+  const [operatorId, setOperatorId] = useState('');
   const [error, setError] = useState(null);
+  // Saving the route to a provider with several operators needs the operator who runs it.
+  const operators = (providers.find((p) => p._id === providerId)?.operators || []).filter((o) => o.status === 'ACTIVE');
+  const pickOperator = save && operators.length > 1;
   const resolve = async (action) => {
     setError(null);
     try {
-      await api.post(`/performance-imports/${importId}/routes`, { route: m.route, action, providerId, saveToProfile: save });
+      await api.post(`/performance-imports/${importId}/routes`, { route: m.route, action, providerId, saveToProfile: save, operatorId: pickOperator ? operatorId : undefined });
       onResolved();
     } catch (e) { setError(e); }
   };
@@ -114,7 +118,13 @@ function RouteRow({ m, providers, importId, onResolved }) {
               {(m.candidates?.length ? m.candidates.map((c) => ({ _id: c.id, name: c.name })) : providers).map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
             </select>
             <label className="check small"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} /> Save to profile</label>
-            <button className="btn btn-sm btn-primary" disabled={!providerId} onClick={() => resolve('ASSIGN')}>Assign</button>
+            {pickOperator && (
+              <select aria-label={`Operator for route ${m.route}`} style={{ width: 160 }} value={operatorId} onChange={(e) => setOperatorId(e.target.value)}>
+                <option value="">Which operator…</option>
+                {operators.map((o) => <option key={o._id} value={o._id}>{o.name}</option>)}
+              </select>
+            )}
+            <button className="btn btn-sm btn-primary" disabled={!providerId || (pickOperator && !operatorId)} onClick={() => resolve('ASSIGN')}>Assign</button>
             <button className="btn btn-sm" onClick={() => resolve('IGNORE')}>Ignore</button>
           </div>
         ) : (m.status === 'ASSIGNED' || m.status === 'IGNORED') && (

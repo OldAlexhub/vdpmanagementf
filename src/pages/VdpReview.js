@@ -71,6 +71,44 @@ export function PerformanceCard({ view }) {
   );
 }
 
+// Several operators: each is measured against their own contract; the provider is paid the total.
+export function OperatorsCard({ calc, perTrip }) {
+  const ops = calc?.operators || [];
+  if (ops.length < 2) return null;
+  const weekNumbers = ops[0].weeks.map((w) => w.weekNumber);
+  return (
+    <Card title="By operator" hint="Each operator’s hours are measured against their own contracted hours." body={false}>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Operator</th><th>Route</th>{weekNumbers.map((n) => <th key={n} className="num">Week {n}</th>)}<th className="num">Earned</th><th className="num">Lift lease</th></tr>
+          </thead>
+          <tbody>
+            {ops.map((o) => (
+              <tr key={o.name}>
+                <td className="strong">{o.name}</td>
+                <td className="mono">{o.routes.join(', ') || '—'}</td>
+                {o.weeks.map((w) => (
+                  <td key={w.weekNumber} className="num">
+                    <div className="strong">{money(w.weeklyEarnings)}</div>
+                    <div className="muted small">
+                      {perTrip
+                        ? `${num(w.trips)} trips × ${rate(w.incentiveRate)}`
+                        : <>{num(w.actualHours)} of {num(w.contractedHours)} h · {pct(w.performancePercentage)}<br />{w.tierLabel} · {rate(w.incentiveRate)}{Number(w.bonusHours) > 0 ? ` · ${num(w.bonusHours)} bonus h` : ''}</>}
+                    </div>
+                  </td>
+                ))}
+                <td className="num strong">{money(o.earnings)}</td>
+                <td className="num minus">{o.lease !== '0.00' ? `−${money(o.lease)}` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 export function EarningsCard({ calc, perTrip }) {
   if (!calc) return null;
   const weeks = calc.weeks;
@@ -120,7 +158,9 @@ function AdjustmentsCard({ vdp, types, editable, onChanged }) {
             <tr>
               <td className="strong">Lift lease <Badge tone="outline">Automatic</Badge></td>
               <td className="small">
-                {l.frequency === 'NONE' || !l.amount ? 'No lift lease on profile' : `${money(l.amount)} / ${LEASE_LABELS[l.frequency]}`}
+                {l.operators?.length > 1
+                  ? l.operators.map((o) => <div key={o.name}>{o.name}: {o.frequency === 'NONE' || !o.amount ? 'no lease' : `${money(o.amount)} / ${LEASE_LABELS[o.frequency]}`}</div>)
+                  : l.frequency === 'NONE' || !l.amount ? 'No lift lease on profile' : `${money(l.amount)} / ${LEASE_LABELS[l.frequency]}`}
                 {l.weeksCharged && ` · ${num(l.weeksCharged)} week(s) charged`}
                 {l.note && <div className="muted">{l.note}</div>}
               </td>
@@ -208,6 +248,7 @@ export function NetCard({ vdp }) {
               {line('Lift lease', c.lease, '-')}
               {line('Fares collected', c.fares, '-')}
               {line('Other deductions', c.otherDeductions, '-')}
+              {c.fuelReimbursementRate && line(`Fuel reimbursement (${num(c.fuelTrips)} trips × ${rate(c.fuelReimbursementRate)})`, c.fuelReimbursement, '+')}
               {line('Reimbursements', c.reimbursements, '+')}
               {line('Other income', c.otherIncome, '+')}
               <tr className="total"><td>Net VDP</td><td className="num" style={{ fontSize: 16 }}>{money(c.net)}</td></tr>
@@ -337,6 +378,7 @@ export default function VdpReview() {
             <div><div className="k">VDP plan</div><div className="v">{v.plan ? <>{v.plan.name} <span className="muted small">v{v.plan.versionNumber} · {PAYMENT_TYPE_LABELS[v.settings?.paymentType?.value]}</span></> : '—'}</div></div>
             <div><div className="k">TUI eligible</div><div className="v">{v.settings ? (v.settings.tuiEligible.value ? 'Yes' : 'No') : '—'}{v.settings?.tuiEligible.source === 'PROVIDER_OVERRIDE' && <span className="source-tag source-override"> · override</span>}</div></div>
             <div><div className="k">Bonus rate</div><div className="v">{v.settings?.bonusEnabled.value ? rate(v.settings.bonusRate.value) : 'None'}</div></div>
+            <div><div className="k">Fuel reimbursement</div><div className="v">{v.settings?.fuelReimbursementEnabled?.value ? `${rate(v.settings.fuelReimbursementRate.value)} / trip` : 'None'}</div></div>
           </div>
         </Card>
 
@@ -344,6 +386,7 @@ export default function VdpReview() {
           <div className="stack">
             {!v.calculation && !v.performance && <Card><Empty title="Not calculated">Resolve the issues above, then recalculate.</Empty></Card>}
             <PerformanceCard view={v} />
+            <OperatorsCard calc={v.calculation} perTrip={perTrip} />
             <EarningsCard calc={v.calculation} perTrip={perTrip} />
             <AdjustmentsCard vdp={vdp} types={types.data || []} editable={editable} onChanged={(d) => { setData(d); toast('VDP updated'); }} />
             <ExplainCalculation calc={v.calculation} settings={v.settings} />

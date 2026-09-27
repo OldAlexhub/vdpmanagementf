@@ -5,8 +5,17 @@ import { rate, num, money, date, cycleLabel, METRIC_LABELS, PAYMENT_TYPE_LABELS,
 import { ActiveBadge, Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, PageHead, StatusBadge, useLoad, useToast } from '../components/ui';
 import { TierTable, planSummary } from './Plans';
 import PortalAccess from '../components/PortalAccess';
+import BulkImport from '../components/BulkImport';
 
 const leaseText = (l) => (!l || l.frequency === 'NONE' || !l.amount ? 'None' : `${money(l.amount)} / ${LEASE_LABELS[l.frequency]}`);
+
+// List rows carry the raw provider; older providers keep their lease on the provider itself.
+function leaseSummary(p) {
+  const ops = p.operators?.length ? p.operators.filter((o) => o.status === 'ACTIVE') : [{ liftLease: p.liftLease }];
+  const leased = ops.filter((o) => o.liftLease && o.liftLease.frequency !== 'NONE' && o.liftLease.amount);
+  if (ops.length === 1) return leaseText(ops[0].liftLease);
+  return leased.length ? `${leased.length} of ${ops.length} operators` : 'None';
+}
 
 export function ProviderList() {
   const navigate = useNavigate();
@@ -14,8 +23,9 @@ export function ProviderList() {
   const [search, setSearch] = useState(params.get('search') || '');
   const divisionId = params.get('divisionId') || '';
   const status = params.get('status') ?? 'ACTIVE';
+  const [importing, setImporting] = useState(false);
   const divisions = useLoad(() => api.get('/divisions'), []);
-  const { data, loading, error } = useLoad(
+  const { data, loading, error, reload } = useLoad(
     () => api.get('/providers', { divisionId, status, search: params.get('search') || '' }),
     [divisionId, status, params.get('search')],
   );
@@ -33,7 +43,8 @@ export function ProviderList() {
   return (
     <div className="page">
       <PageHead title="Providers" sub="Who they are, which route they run, and how they are paid."
-        actions={<button className="btn btn-primary" onClick={() => navigate('/providers/new')}>New provider</button>} />
+        actions={<><button className="btn" onClick={() => setImporting(true)}>Bulk import</button><button className="btn btn-primary" onClick={() => navigate('/providers/new')}>New provider</button></>} />
+      {importing && <BulkImport kind="providers" title="Providers" onClose={() => setImporting(false)} onDone={reload} />}
       <div className="filters" style={{ marginBottom: 16 }}>
         <Field label="Search" htmlFor="pv-search"><input id="pv-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Name, operator, route, number" /></Field>
         <Field label="Division" htmlFor="pv-div">
@@ -66,10 +77,10 @@ export function ProviderList() {
                       <tr key={p._id} className="clickable" onClick={() => navigate(`/providers/${p._id}`)}>
                         <td><div className="strong">{p.name}</div><div className="muted small">#{p.providerNumber || '—'}</div></td>
                         <td>{p.division ? `DIV ${p.division.divisionNumber}` : '—'}</td>
-                        <td>{p.operatorName || '—'}</td>
+                        <td>{p.operatorName || '—'}{p.operators?.filter((o) => o.status === 'ACTIVE').length > 1 && <div className="muted small">{p.operators.filter((o) => o.status === 'ACTIVE').length} operators</div>}</td>
                         <td className="mono">{p.routes.join(', ') || <span className="muted">—</span>}</td>
                         <td>{p.planName || <Badge tone="bad">No plan</Badge>} {override && <Badge tone="warn">Override</Badge>}</td>
-                        <td className="nowrap">{leaseText(p.liftLease)}</td>
+                        <td className="nowrap">{leaseSummary(p)}</td>
                         <td><ActiveBadge status={p.status} /></td>
                       </tr>
                     );
@@ -129,11 +140,8 @@ export function ProviderProfile() {
         <Card title="Profile">
           <div className="kv" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
             <div><div className="k">Provider number</div><div className="v">{p.providerNumber || '—'}</div></div>
-            <div><div className="k">Operator</div><div className="v">{p.operatorName || '—'}</div></div>
-            <div><div className="k">Route / run</div><div className="v mono">{p.routes.join(', ') || '—'}</div></div>
             <div><div className="k">Service type</div><div className="v">{p.serviceType || '—'}</div></div>
             <div><div className="k">VDP plan</div><div className="v">{p.plan ? <Link to={`/plans/${p.plan._id}`}>{p.plan.name}</Link> : <Badge tone="bad">No plan assigned</Badge>}</div></div>
-            <div><div className="k">Lift lease</div><div className="v">{leaseText(p.liftLease)}</div></div>
             <div><div className="k">Email</div><div className="v">{p.contact?.email || '—'}</div></div>
             <div><div className="k">Phone</div><div className="v">{p.contact?.phone || '—'}</div></div>
           </div>
@@ -150,6 +158,7 @@ export function ProviderProfile() {
                   <SettingRow label="Contracted hours" setting={s.contractedHours} render={(v) => `${num(v)} / week`} />
                   <SettingRow label="TUI eligible" setting={s.tuiEligible} render={(v) => (v ? <Badge tone="ok">Yes</Badge> : <Badge>No</Badge>)} />
                   <SettingRow label="Bonus rate" setting={s.bonusEnabled.value ? s.bonusRate : { ...s.bonusRate, value: 'None' }} render={(v) => (v === 'None' ? v : `${rate(v)} / hour above contract`)} />
+                  <SettingRow label="Fuel reimbursement" setting={s.fuelReimbursementEnabled?.value ? s.fuelReimbursementRate : { source: 'PLAN', value: 'None' }} render={(v) => (v === 'None' ? v : `${rate(v)} / trip`)} />
                   <SettingRow label="Performance hours" setting={s.performanceHourMetric} render={(v) => METRIC_LABELS[v]} />
                 </tbody>
               </table>
@@ -164,6 +173,25 @@ export function ProviderProfile() {
         </Card>
       </div>
 
+      <div style={{ marginTop: 16 }} />
+      <Card title="Operators" hint="Each operator is measured against their own contracted hours; the provider is paid the total." body={false}>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Operator</th><th>Route / run</th><th>Contracted hours</th><th>Lift lease</th><th>Status</th></tr></thead>
+            <tbody>
+              {(p.operators || []).map((o) => (
+                <tr key={o.id || o.name}>
+                  <td className="strong">{o.name}</td>
+                  <td className="mono">{o.routes.join(', ') || <Badge tone="warn">No route</Badge>}</td>
+                  <td>{o.contractedHours ? <>{num(o.contractedHours)} / week <span className="source-tag source-override">Operator</span></> : s?.contractedHours.value ? <>{num(s.contractedHours.value)} / week <span className="source-tag source-plan">{s.contractedHours.source === 'PLAN' ? 'Plan' : 'Provider'}</span></> : '—'}</td>
+                  <td className="nowrap">{leaseText(o.liftLease)}</td>
+                  <td><ActiveBadge status={o.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
       <div style={{ marginTop: 16 }} />
       <PortalAccess provider={p} />
       <div style={{ marginTop: 16 }} />
@@ -185,12 +213,68 @@ export function ProviderProfile() {
   );
 }
 
+const blankOperator = () => ({ name: '', routes: '', status: 'ACTIVE', contractedHours: '', liftLease: { amount: '', frequency: 'WEEKLY' } });
+
 const emptyProvider = {
-  name: '', providerNumber: '', divisionId: '', status: 'ACTIVE', operatorName: '', routes: '', serviceType: '', planId: '',
-  liftLease: { amount: '', frequency: 'WEEKLY' },
+  name: '', providerNumber: '', divisionId: '', status: 'ACTIVE', serviceType: '', planId: '',
+  operators: [blankOperator()],
   overrides: { contractedHours: '', basePay: '', bonusRate: '', tuiEligibility: 'INHERIT' },
   contact: { email: '', phone: '', address: '' }, notes: '',
 };
+
+// Operators as edited on the form. A provider saved before operators existed arrives with
+// one operator whose id is "default" — it becomes a real operator when saved.
+const operatorForm = (o) => ({
+  _id: o.id && o.id !== 'default' ? o.id : undefined,
+  name: o.name || '',
+  routes: (o.routes || []).join(', '),
+  status: o.status || 'ACTIVE',
+  contractedHours: o.contractedHours || '',
+  liftLease: { amount: o.liftLease?.amount || '', frequency: o.liftLease?.frequency || 'NONE' },
+});
+
+function OperatorsEditor({ operators, onChange, planHours }) {
+  const update = (i, patch) => onChange(operators.map((o, j) => (j === i ? { ...o, ...patch } : o)));
+  const lease = (i, k, v) => update(i, { liftLease: { ...operators[i].liftLease, [k]: v } });
+  return (
+    <div className="stack">
+      <div className="table-wrap">
+        <table className="table-compact">
+          <thead>
+            <tr><th>Operator</th><th>Route / run</th><th>Contracted h/week</th><th>Lift lease</th><th>Lease amount ($)</th><th>Status</th><th /></tr>
+          </thead>
+          <tbody>
+            {operators.map((o, i) => (
+              <tr key={i}>
+                <td><input aria-label={`Operator ${i + 1} name`} value={o.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="Lisa Moore" /></td>
+                <td><input aria-label={`Operator ${i + 1} routes`} value={o.routes} onChange={(e) => update(i, { routes: e.target.value })} placeholder="918" style={{ width: 90 }} /></td>
+                <td><input aria-label={`Operator ${i + 1} contracted hours`} value={o.contractedHours} onChange={(e) => update(i, { contractedHours: e.target.value })} placeholder={planHours ? `Plan: ${num(planHours)}` : 'Plan'} style={{ width: 90 }} /></td>
+                <td>
+                  <select aria-label={`Operator ${i + 1} lease frequency`} value={o.liftLease.frequency} onChange={(e) => lease(i, 'frequency', e.target.value)}>
+                    <option value="WEEKLY">Weekly</option><option value="PER_VDP_CYCLE">Per VDP cycle</option><option value="NONE">No lease</option>
+                  </select>
+                </td>
+                <td>{o.liftLease.frequency !== 'NONE' && <input aria-label={`Operator ${i + 1} lease amount`} value={o.liftLease.amount} onChange={(e) => lease(i, 'amount', e.target.value)} placeholder="197.50" style={{ width: 90 }} />}</td>
+                <td>
+                  <select aria-label={`Operator ${i + 1} status`} value={o.status} onChange={(e) => update(i, { status: e.target.value })}>
+                    <option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option>
+                  </select>
+                </td>
+                <td className="num">{operators.length > 1 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(operators.filter((_, j) => j !== i))}>Remove</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="actions"><button type="button" className="btn btn-sm" onClick={() => onChange([...operators, blankOperator()])}>Add operator</button></div>
+      <p className="help muted small">
+        Routes as shown in the Performance Report “Run/Route” column; separate several with commas. A route belongs to one operator.
+        Each operator’s hours are measured against their own contracted hours (blank = plan), and their lift lease is charged separately.
+        The provider receives one VDP with the total.
+      </p>
+    </div>
+  );
+}
 
 export function ProviderEdit() {
   const { id } = useParams();
@@ -206,9 +290,8 @@ export function ProviderEdit() {
     if (!id) { setForm(emptyProvider); return; }
     api.get(`/providers/${id}`).then((p) => setForm({
       ...emptyProvider, ...p,
-      routes: p.routes.join(', '),
       planId: p.planId || '',
-      liftLease: { amount: p.liftLease?.amount || '', frequency: p.liftLease?.frequency || 'NONE' },
+      operators: p.operators?.length ? p.operators.map(operatorForm) : [blankOperator()],
       overrides: {
         contractedHours: p.overrides?.contractedHours || '', basePay: p.overrides?.basePay || '',
         bonusRate: p.overrides?.bonusRate || '', tuiEligibility: p.overrides?.tuiEligibility || 'INHERIT',
@@ -231,7 +314,9 @@ export function ProviderEdit() {
     setBusy(true);
     setError(null);
     try {
-      const saved = id ? await api.put(`/providers/${id}`, form) : await api.post('/providers', form);
+      const { routes, operatorName, liftLease, ...body } = form;
+      body.operators = form.operators.filter((o) => o.name.trim() || o.routes.trim());
+      const saved = id ? await api.put(`/providers/${id}`, body) : await api.post('/providers', body);
       toast('Provider saved');
       navigate(`/providers/${saved._id}`);
     } catch (e) {
@@ -262,12 +347,12 @@ export function ProviderEdit() {
             <Field label="Status" htmlFor="f-status">
               <select id="f-status" value={form.status} onChange={set('status')}><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select>
             </Field>
-            <Field label="Operator" htmlFor="f-op"><input id="f-op" value={form.operatorName || ''} onChange={set('operatorName')} placeholder="Lisa Moore" /></Field>
-            <Field label="Route / run" htmlFor="f-routes" help="As shown in the Performance Report “Run/Route” column. Separate several with commas.">
-              <input id="f-routes" value={form.routes} onChange={set('routes')} placeholder="918" />
-            </Field>
             <Field label="Service type" htmlFor="f-svc"><input id="f-svc" value={form.serviceType || ''} onChange={set('serviceType')} placeholder="TDEV Night" /></Field>
           </div>
+        </Card>
+
+        <Card title="Operators" hint="The provider is the one who gets paid. Add each operator (driver) who works for them.">
+          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} />
         </Card>
 
         <Card title="How they are paid">
@@ -286,7 +371,7 @@ export function ProviderEdit() {
                   <option value="OFF">Not eligible (override)</option>
                 </select>
               </Field>
-              <Field label="Contracted hours override" htmlFor="f-hours" help={inheritHint(cur?.contractedHours, ' h/week')}>
+              <Field label="Contracted hours override (all operators)" htmlFor="f-hours" help={`${inheritHint(cur?.contractedHours, ' h/week')} An operator’s own contracted hours take priority.`}>
                 <input id="f-hours" value={form.overrides.contractedHours} onChange={setIn('overrides', 'contractedHours')} />
               </Field>
               <Field label="Base pay override" htmlFor="f-base" help={inheritHint(cur?.basePay && rate(cur.basePay))}>
@@ -295,18 +380,6 @@ export function ProviderEdit() {
               {cur?.bonusEnabled && (
                 <Field label="Bonus rate override" htmlFor="f-bonus" help={inheritHint(rate(cur.bonusRate))}>
                   <input id="f-bonus" value={form.overrides.bonusRate} onChange={setIn('overrides', 'bonusRate')} />
-                </Field>
-              )}
-            </div>
-            <div className="form-grid">
-              <Field label="Lift lease frequency" htmlFor="f-lfreq">
-                <select id="f-lfreq" value={form.liftLease.frequency} onChange={setIn('liftLease', 'frequency')}>
-                  <option value="WEEKLY">Weekly</option><option value="PER_VDP_CYCLE">Per VDP cycle</option><option value="NONE">No lease</option>
-                </select>
-              </Field>
-              {form.liftLease.frequency !== 'NONE' && (
-                <Field label="Lift lease amount ($)" htmlFor="f-lamt" help={form.liftLease.frequency === 'WEEKLY' ? 'Charged for each week in the cycle (×2).' : 'Charged once per cycle.'}>
-                  <input id="f-lamt" value={form.liftLease.amount} onChange={setIn('liftLease', 'amount')} placeholder="197.50" />
                 </Field>
               )}
             </div>

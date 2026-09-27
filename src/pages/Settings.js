@@ -95,7 +95,8 @@ function RulesCard() {
         <li>Hourly plans with a bonus: hours up to the contract are paid at that rate, hours above it at the bonus rate.</li>
         <li>Per-trip plans: trips × rate.</li>
         <li>Each earnings line is rounded to the cent; Gross = Week 1 + Week 2.</li>
-        <li>Net = Gross − lift lease − fares − other deductions + reimbursements + other income.</li>
+        <li>Plans with fuel reimbursement: trips in the cycle × the per-trip fuel rate, added after Gross (not part of earnings).</li>
+        <li>Net = Gross − lift lease − fares − other deductions + fuel reimbursement + reimbursements + other income.</li>
         <li>Approval freezes a snapshot of every rate and input used and sends the statement to the provider portal.</li>
         <li>The provider approves by the end of the Closed for Submission date; otherwise it is auto-approved. Then it can be marked paid.</li>
       </ol>

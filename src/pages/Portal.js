@@ -6,7 +6,7 @@ import ExplainCalculation from '../components/Explain';
 import { IssueList, ReportIssueModal } from '../components/Issues';
 import { cycleLabel, date, dateTime, deadlineLabel, money, num, rate, LEASE_LABELS } from '../format';
 import { Alert, Badge, Card, Confirm, Empty, ErrorAlert, Loading, PageHead, useLoad, useToast } from '../components/ui';
-import { EarningsCard, NetCard, PerformanceCard } from './VdpReview';
+import { EarningsCard, NetCard, OperatorsCard, PerformanceCard } from './VdpReview';
 import { PasswordCard } from './Settings';
 import PortalDashboard from './PortalDashboard';
 
@@ -151,11 +151,13 @@ function PortalStatement() {
             <div><div className="k">Payment date</div><div className="v">{date(v.cycle?.paymentDate, 'long')}</div></div>
             <div><div className="k">Contracted hours</div><div className="v">{v.settings?.contractedHours?.value ? `${num(v.settings.contractedHours.value)} / week` : '—'}</div></div>
             <div><div className="k">Bonus rate</div><div className="v">{v.settings?.bonusEnabled?.value ? rate(v.settings.bonusRate.value) : 'None'}</div></div>
+            {v.settings?.fuelReimbursementEnabled?.value && <div><div className="k">Fuel reimbursement</div><div className="v">{rate(v.settings.fuelReimbursementRate.value)} / trip</div></div>}
           </div>
         </Card>
         <div className="split">
           <div className="stack">
             <PerformanceCard view={v} />
+            <OperatorsCard calc={v.calculation} perTrip={perTrip} />
             <EarningsCard calc={v.calculation} perTrip={perTrip} />
             <AdjustmentList view={v} />
             <ExplainCalculation calc={v.calculation} settings={v.settings} />

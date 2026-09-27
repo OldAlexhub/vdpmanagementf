@@ -4,6 +4,7 @@ import { api } from '../api';
 import { useAuth } from '../App';
 import { date, isoDate, rate, num, METRIC_LABELS, PAYMENT_TYPE_LABELS } from '../format';
 import { ActiveBadge, Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
+import BulkImport from '../components/BulkImport';
 
 const blankTier = () => ({ minimumPercentage: '', maximumPercentage: '', rate: '' });
 const DEFAULT_TIERS = [
@@ -68,6 +69,8 @@ const versionForm = (v) => ({
   incentiveTiers: (v?.incentiveTiers || []).map((t) => ({ ...t, maximumPercentage: t.maximumPercentage ?? '' })),
   bonusEnabled: v?.bonusEnabled ?? false,
   bonusRate: v?.bonusRate || '',
+  fuelReimbursementEnabled: v?.fuelReimbursementEnabled ?? false,
+  fuelReimbursementRate: v?.fuelReimbursementRate || '',
   performanceHourMetric: v?.performanceHourMetric || 'TOTAL_HOURS',
   performanceHourColumn: v?.performanceHourColumn || '',
   effectiveFrom: isoDate(v?.effectiveFrom) || '',
@@ -134,6 +137,19 @@ function VersionFields({ form, setForm, showDates = true }) {
           )}
         </div>
       )}
+      <div className="card card-body">
+        <label className="check"><input type="checkbox" checked={form.fuelReimbursementEnabled} onChange={set('fuelReimbursementEnabled')} /> Pay fuel reimbursement per trip</label>
+        <p className="muted small" style={{ margin: '4px 0 0 24px' }}>
+          When on, trips in the cycle × this rate is added to the VDP after Gross. When off, nothing is added.
+        </p>
+        {form.fuelReimbursementEnabled && (
+          <div className="form-grid" style={{ marginTop: 10 }}>
+            <Field label="Fuel reimbursement ($/trip)" htmlFor="v-fuel" help="Up to 4 decimals.">
+              <input id="v-fuel" value={form.fuelReimbursementRate} onChange={set('fuelReimbursementRate')} placeholder="2.50" />
+            </Field>
+          </div>
+        )}
+      </div>
       <Field label="Notes" htmlFor="v-notes"><textarea id="v-notes" value={form.notes} onChange={set('notes')} /></Field>
     </div>
   );
@@ -198,6 +214,7 @@ export function planSummary(v) {
   if (v.contractedHours) parts.push(`${num(v.contractedHours)} h/week`);
   parts.push(v.incentiveEnabled ? `TUI ${v.incentiveTiers.length} tiers` : 'no TUI');
   if (v.bonusEnabled) parts.push(`bonus ${rate(v.bonusRate)}`);
+  if (v.fuelReimbursementEnabled) parts.push(`fuel ${rate(v.fuelReimbursementRate)}/trip`);
   return parts.join(' · ');
 }
 
@@ -210,12 +227,14 @@ export function PlanList() {
   const divisions = useLoad(() => api.get('/divisions'), []);
   const { data, loading, error, reload } = useLoad(() => api.get('/vdp-plans', { divisionId }), [divisionId]);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const divName = (id) => { const d = divisions.data?.find((x) => x._id === id); return d ? `DIV ${d.divisionNumber} – ${d.name}` : ''; };
 
   return (
     <div className="page">
       <PageHead title="VDP Plans" sub="How providers are paid. Providers inherit these rules unless their profile overrides them."
-        actions={user.role === 'ADMIN' && <button className="btn btn-primary" onClick={() => setCreating(true)}>New plan</button>} />
+        actions={user.role === 'ADMIN' && <><button className="btn" onClick={() => setImporting(true)}>Bulk import</button><button className="btn btn-primary" onClick={() => setCreating(true)}>New plan</button></>} />
+      {importing && <BulkImport kind="plans" title="VDP plans" onClose={() => setImporting(false)} onDone={reload} />}
       <div className="filters" style={{ marginBottom: 16 }}>
         <Field label="Division" htmlFor="pl-div">
           <select id="pl-div" value={divisionId} onChange={(e) => setParams(e.target.value ? { divisionId: e.target.value } : {})}>
@@ -299,6 +318,7 @@ export function PlanDetail() {
                 <div><div className="k">Performance hours</div><div className="v">{METRIC_LABELS[v.performanceHourMetric]}{v.performanceHourColumn ? ` (${v.performanceHourColumn})` : ''}</div></div>
                 <div><div className="k">TUI eligible</div><div className="v">{v.incentiveEnabled ? <Badge tone="ok">On</Badge> : <Badge>Off</Badge>}</div></div>
                 <div><div className="k">Bonus rate</div><div className="v">{v.bonusEnabled ? `${rate(v.bonusRate)}/hour above contract` : 'None'}</div></div>
+                <div><div className="k">Fuel reimbursement</div><div className="v">{v.fuelReimbursementEnabled ? `${rate(v.fuelReimbursementRate)}/trip` : 'None'}</div></div>
               </div>
               {(v.incentiveEnabled || v.incentiveTiers.length > 0) && (
                 <>

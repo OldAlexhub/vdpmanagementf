@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../App';
-import { isoDate, date } from '../format';
+import BulkImport from '../components/BulkImport';
 import { ActiveBadge, Card, Confirm, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
 
 const TIMEZONES = ['America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York', 'America/Detroit', 'America/Phoenix'];
@@ -14,16 +14,10 @@ function DivisionForm({ division, onClose, onSaved }) {
     location: division?.location || '',
     timezone: division?.timezone || 'America/Los_Angeles',
     notes: division?.notes || '',
-    cycleSettings: {
-      anchorDate: isoDate(division?.cycleSettings?.anchorDate) || '2026-08-24',
-      submissionOffsetDays: division?.cycleSettings?.submissionOffsetDays ?? 15,
-      paymentOffsetDays: division?.cycleSettings?.paymentOffsetDays ?? 4,
-    },
   });
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
-  const setCycle = (k) => (e) => setForm({ ...form, cycleSettings: { ...form.cycleSettings, [k]: e.target.value } });
 
   const save = async () => {
     setBusy(true);
@@ -54,21 +48,9 @@ function DivisionForm({ division, onClose, onSaved }) {
             </select>
           </Field>
         </div>
-        <div>
-          <h3 style={{ marginBottom: 8 }}>VDP cycle schedule</h3>
-          <div className="form-grid">
-            <Field label="A known cycle start (Monday)" htmlFor="d-anchor" help="Cycles are 14 days, Monday to Sunday, aligned to this date.">
-              <input id="d-anchor" type="date" value={form.cycleSettings.anchorDate} onChange={setCycle('anchorDate')} />
-            </Field>
-            <div />
-            <Field label="Submission closes (days after cycle end)" htmlFor="d-sub">
-              <input id="d-sub" type="number" min="0" value={form.cycleSettings.submissionOffsetDays} onChange={setCycle('submissionOffsetDays')} />
-            </Field>
-            <Field label="Payment date (days after submission)" htmlFor="d-pay">
-              <input id="d-pay" type="number" min="0" value={form.cycleSettings.paymentOffsetDays} onChange={setCycle('paymentOffsetDays')} />
-            </Field>
-          </div>
-        </div>
+        <p className="muted small">
+          VDP cycles are company-wide (see <Link to="/cycles">Cycles</Link>). {division ? '' : 'A new division joins the current and upcoming cycles automatically.'}
+        </p>
         <Field label="Notes" htmlFor="d-notes"><textarea id="d-notes" value={form.notes} onChange={set('notes')} /></Field>
         <ErrorAlert error={error} />
       </div>
@@ -83,13 +65,14 @@ export default function Divisions() {
   const { data, loading, error, reload } = useLoad(() => api.get('/divisions'), []);
   const [editing, setEditing] = useState(null);
   const [toggling, setToggling] = useState(null);
+  const [importing, setImporting] = useState(false);
 
   return (
     <div className="page">
       <PageHead
         title="Divisions"
         sub="Each division has its own providers, VDP plans and cycle schedule."
-        actions={isAdmin && <button className="btn btn-primary" onClick={() => setEditing({})}>New division</button>}
+        actions={isAdmin && <><button className="btn" onClick={() => setImporting(true)}>Bulk import</button><button className="btn btn-primary" onClick={() => setEditing({})}>New division</button></>}
       />
       <ErrorAlert error={error} />
       {loading ? <Loading /> : (
@@ -102,7 +85,7 @@ export default function Divisions() {
             <div className="table-wrap">
               <table>
                 <thead>
-                  <tr><th>Division</th><th>Location</th><th>Time zone</th><th className="num">Active providers</th><th className="num">Active plans</th><th>Cycle anchor</th><th>Status</th><th /></tr>
+                  <tr><th>Division</th><th>Location</th><th>Time zone</th><th className="num">Active providers</th><th className="num">Active plans</th><th>Status</th><th /></tr>
                 </thead>
                 <tbody>
                   {data.map((d) => (
@@ -112,7 +95,6 @@ export default function Divisions() {
                       <td className="small">{d.timezone}</td>
                       <td className="num"><Link to={`/providers?divisionId=${d._id}`}>{d.activeProviders}</Link></td>
                       <td className="num"><Link to={`/plans?divisionId=${d._id}`}>{d.activePlans}</Link></td>
-                      <td className="small">{date(d.cycleSettings?.anchorDate)} · +{d.cycleSettings?.submissionOffsetDays}d / +{d.cycleSettings?.paymentOffsetDays}d</td>
                       <td><ActiveBadge status={d.status} /></td>
                       <td className="num">
                         {isAdmin && (
@@ -139,6 +121,7 @@ export default function Divisions() {
           onSaved={() => { setEditing(null); toast('Division saved'); reload(); }}
         />
       )}
+      {importing && <BulkImport kind="divisions" title="Divisions" onClose={() => setImporting(false)} onDone={reload} />}
       {toggling && (
         <Confirm
           title={`${toggling.status === 'ACTIVE' ? 'Deactivate' : 'Activate'} DIV ${toggling.divisionNumber}?`}
