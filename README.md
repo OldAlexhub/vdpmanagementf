@@ -1,70 +1,56 @@
-# Getting Started with Create React App
+# Big Star VDP — Web client
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+React app (Create React App) for the Big Star VDP Management System: the admin screens and the
+provider portal. It only displays data; every calculation happens in the API (`../server`).
 
-## Available Scripts
+## Setup
 
-In the project directory, you can run:
+```bash
+npm install
+cp .env.example .env   # first time only
+npm start              # http://localhost:3000
+```
 
-### `npm start`
+The API must be running (see `../server/README.md`).
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+## Environment
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+The backend location is read from `client/.env`; nothing is hardcoded in the source.
 
-### `npm test`
+| Variable | Example | Purpose |
+|---|---|---|
+| `REACT_APP_API_URL` | `http://localhost:5000` | Backend base URL, **without** `/api`. Leave empty to call the same origin the app is served from. |
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+* `.env` is git-ignored; commit changes to `.env.example` instead.
+* Values are baked in when `npm start` or `npm run build` runs. Restart the dev server or rebuild
+  after changing them.
+* The API must allow this client's origin: set `CLIENT_ORIGIN` in `server/.env` to the address the
+  client is served from (e.g. `http://localhost:3000`).
 
-### `npm run build`
+## Scripts
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+| Command | Purpose |
+|---|---|
+| `npm start` | Dev server on http://localhost:3000 with live reload |
+| `npm run build` | Production build into `build/` |
+| `npm test` | Test runner in watch mode |
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Deploying
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+**Served by the API (simplest).** Leave `REACT_APP_API_URL` empty and run `npm run build`. The API
+serves `client/build` on its own port, so the client and API share an origin.
 
-### `npm run eject`
+**Hosted separately** (another host, CDN, etc.):
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+1. Set `REACT_APP_API_URL` to the public API URL (e.g. `https://api.example.com`), then `npm run build`.
+2. Serve `build/` as a single-page app (unknown paths fall back to `index.html`).
+3. In `server/.env`, add the client's address to `CLIENT_ORIGIN`. If the client is on a different
+   site than the API, also set `COOKIE_SAME_SITE=none`; both must then be served over HTTPS.
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+## Layout
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+| Path | Contents |
+|---|---|
+| `src/api.js` | Fetch wrapper: API base URL, session cookie, errors, file downloads |
+| `src/pages/` | Screens (Dashboard, Cycles, Processing, VDP review, Reports, Portal, …) |
+| `src/components/` | Shared components |
