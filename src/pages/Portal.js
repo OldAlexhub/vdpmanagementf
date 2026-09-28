@@ -152,12 +152,13 @@ function PortalStatement() {
             <div><div className="k">Contracted hours</div><div className="v">{v.settings?.contractedHours?.value ? `${num(v.settings.contractedHours.value)} / week` : '—'}</div></div>
             <div><div className="k">Bonus rate</div><div className="v">{v.settings?.bonusEnabled?.value ? rate(v.settings.bonusRate.value) : 'None'}</div></div>
             {v.settings?.fuelReimbursementEnabled?.value && <div><div className="k">Fuel reimbursement</div><div className="v">{rate(v.settings.fuelReimbursementRate.value)} / trip</div></div>}
+            {v.settings?.fuelMethod?.value === 'SERVICE_MILE_ALLOWANCE' && <div><div className="k">Fuel</div><div className="v">Service mile allowance · {num(v.settings.fuelMpg.value)} MPG</div></div>}
           </div>
         </Card>
         <div className="split">
           <div className="stack">
             <PerformanceCard view={v} />
-            <OperatorsCard calc={v.calculation} perTrip={perTrip} />
+            <OperatorsCard calc={v.calculation} perTrip={perTrip} settings={v.settings} />
             <EarningsCard calc={v.calculation} perTrip={perTrip} />
             <AdjustmentList view={v} />
             <ExplainCalculation calc={v.calculation} settings={v.settings} />

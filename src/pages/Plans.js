@@ -61,6 +61,17 @@ function TierEditor({ tiers, onChange }) {
   );
 }
 
+// Versions saved before the fuel method existed only had the per-trip switch.
+export const fuelMethodOf = (v) => v?.fuelMethod || (v?.fuelReimbursementEnabled ? 'PER_TRIP' : 'NONE');
+export const FUEL_METHOD_LABELS = { NONE: 'None', PER_TRIP: 'Per trip reimbursement', SERVICE_MILE_ALLOWANCE: 'Service mile allowance' };
+
+export function fuelSummary(v) {
+  const m = fuelMethodOf(v);
+  if (m === 'PER_TRIP') return `${rate(v.fuelReimbursementRate)} / trip reimbursement`;
+  if (m === 'SERVICE_MILE_ALLOWANCE') return `Service mile allowance · ${num(v.fuelMpg)} MPG`;
+  return 'None';
+}
+
 const versionForm = (v) => ({
   paymentType: v?.paymentType || 'HOURLY',
   basePay: v?.basePay || '',
@@ -69,8 +80,10 @@ const versionForm = (v) => ({
   incentiveTiers: (v?.incentiveTiers || []).map((t) => ({ ...t, maximumPercentage: t.maximumPercentage ?? '' })),
   bonusEnabled: v?.bonusEnabled ?? false,
   bonusRate: v?.bonusRate || '',
-  fuelReimbursementEnabled: v?.fuelReimbursementEnabled ?? false,
+  fuelMethod: fuelMethodOf(v),
   fuelReimbursementRate: v?.fuelReimbursementRate || '',
+  fuelMpg: v?.fuelMpg || '',
+  fuelMileageSource: v?.fuelMileageSource || 'SERVICE_MILES',
   performanceHourMetric: v?.performanceHourMetric || 'TOTAL_HOURS',
   performanceHourColumn: v?.performanceHourColumn || '',
   effectiveFrom: isoDate(v?.effectiveFrom) || '',
@@ -138,17 +151,39 @@ function VersionFields({ form, setForm, showDates = true }) {
         </div>
       )}
       <div className="card card-body">
-        <label className="check"><input type="checkbox" checked={form.fuelReimbursementEnabled} onChange={set('fuelReimbursementEnabled')} /> Pay fuel reimbursement per trip</label>
-        <p className="muted small" style={{ margin: '4px 0 0 24px' }}>
-          When on, trips in the cycle × this rate is added to the VDP after Gross. When off, nothing is added.
-        </p>
-        {form.fuelReimbursementEnabled && (
-          <div className="form-grid" style={{ marginTop: 10 }}>
+        <h3 style={{ margin: '0 0 8px' }}>Fuel</h3>
+        <div className="form-grid">
+          <Field label="Fuel method" htmlFor="v-fuel-method">
+            <select id="v-fuel-method" value={form.fuelMethod} onChange={set('fuelMethod')}>
+              {Object.entries(FUEL_METHOD_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </Field>
+          {form.fuelMethod === 'PER_TRIP' && (
             <Field label="Fuel reimbursement ($/trip)" htmlFor="v-fuel" help="Up to 4 decimals.">
               <input id="v-fuel" value={form.fuelReimbursementRate} onChange={set('fuelReimbursementRate')} placeholder="2.50" />
             </Field>
-          </div>
-        )}
+          )}
+          {form.fuelMethod === 'SERVICE_MILE_ALLOWANCE' && (
+            <>
+              <Field label="Fuel divisor (MPG)" htmlFor="v-mpg" help="Maximum allowed fuel = service miles ÷ this number. Providers can override it on their profile.">
+                <input id="v-mpg" value={form.fuelMpg} onChange={set('fuelMpg')} placeholder="19" />
+              </Field>
+              <Field label="Mileage source" htmlFor="v-miles">
+                <select id="v-miles" value={form.fuelMileageSource} onChange={set('fuelMileageSource')}>
+                  <option value="SERVICE_MILES">Service miles (Performance Report: Miles → Service)</option>
+                </select>
+              </Field>
+            </>
+          )}
+        </div>
+        <p className="muted small" style={{ margin: '6px 0 0' }}>
+          {form.fuelMethod === 'NONE' && 'No fuel reimbursement or fuel deduction.'}
+          {form.fuelMethod === 'PER_TRIP' && 'Trips in the cycle × this rate is added to the VDP after Gross.'}
+          {form.fuelMethod === 'SERVICE_MILE_ALLOWANCE' && <>
+            Maximum allowed fuel = service miles ÷ {form.fuelMpg || 'MPG'}.
+            Accounting enters the provider’s actual fuel expense on the VDP; only the amount above the maximum is deducted.
+          </>}
+        </p>
       </div>
       <Field label="Notes" htmlFor="v-notes"><textarea id="v-notes" value={form.notes} onChange={set('notes')} /></Field>
     </div>
@@ -214,7 +249,8 @@ export function planSummary(v) {
   if (v.contractedHours) parts.push(`${num(v.contractedHours)} h/week`);
   parts.push(v.incentiveEnabled ? `TUI ${v.incentiveTiers.length} tiers` : 'no TUI');
   if (v.bonusEnabled) parts.push(`bonus ${rate(v.bonusRate)}`);
-  if (v.fuelReimbursementEnabled) parts.push(`fuel ${rate(v.fuelReimbursementRate)}/trip`);
+  if (fuelMethodOf(v) === 'PER_TRIP') parts.push(`fuel ${rate(v.fuelReimbursementRate)}/trip`);
+  if (fuelMethodOf(v) === 'SERVICE_MILE_ALLOWANCE') parts.push(`fuel allowance ${num(v.fuelMpg)} MPG`);
   return parts.join(' · ');
 }
 
@@ -318,7 +354,7 @@ export function PlanDetail() {
                 <div><div className="k">Performance hours</div><div className="v">{METRIC_LABELS[v.performanceHourMetric]}{v.performanceHourColumn ? ` (${v.performanceHourColumn})` : ''}</div></div>
                 <div><div className="k">TUI eligible</div><div className="v">{v.incentiveEnabled ? <Badge tone="ok">On</Badge> : <Badge>Off</Badge>}</div></div>
                 <div><div className="k">Bonus rate</div><div className="v">{v.bonusEnabled ? `${rate(v.bonusRate)}/hour above contract` : 'None'}</div></div>
-                <div><div className="k">Fuel reimbursement</div><div className="v">{v.fuelReimbursementEnabled ? `${rate(v.fuelReimbursementRate)}/trip` : 'None'}</div></div>
+                <div><div className="k">Fuel</div><div className="v">{fuelSummary(v)}</div></div>
               </div>
               {(v.incentiveEnabled || v.incentiveTiers.length > 0) && (
                 <>

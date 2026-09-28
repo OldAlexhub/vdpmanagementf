@@ -1,5 +1,6 @@
 // "Explain calculation": attainment, tier reached, and a ledger of every step — per week, then payment.
 // All numbers and wording come from the server's calculation steps; nothing is computed here.
+import { useState } from 'react';
 import { date, money, num, pct, rate } from '../format';
 import { Card } from './ui';
 
@@ -54,6 +55,58 @@ function TierLadder({ tiers, reached, perTrip }) {
   );
 }
 
+// Service mile fuel allowance: how the maximum was reached, and the day-by-day detail on request.
+function FuelAllowance({ fuel, overspend }) {
+  const [open, setOpen] = useState(false);
+  const entered = fuel.actualExpense !== null;
+  const byOperator = fuel.days.some((d) => d.operator);
+  const over = Number(overspend) > 0;
+  const steps = [
+    { label: 'Service miles', detail: `Performance Report (Miles → Service) · week 1 ${num(fuel.weekMiles[0])} + week 2 ${num(fuel.weekMiles[1])}`, value: num(fuel.serviceMiles), tone: 'info' },
+    { label: 'Fuel efficiency', detail: fuel.mpg ? 'VDP plan' : 'Each operator’s VDP plan', value: `${fuel.mpg ? num(fuel.mpg) : fuel.mpgs.join(' / ')} MPG`, tone: 'info' },
+    { label: 'Maximum allowed fuel', detail: fuel.mpg ? `${num(fuel.serviceMiles)} service miles ÷ ${num(fuel.mpg)}` : 'Each operator’s service miles ÷ their MPG', value: money(fuel.maxAllowed), tone: 'subtotal' },
+    { label: 'Actual fuel expense', detail: 'Entered by Accounting', value: entered ? money(fuel.actualExpense) : 'Not entered', tone: 'info' },
+    entered && over
+      ? { label: 'Fuel overspend', detail: `${money(fuel.actualExpense)} actual − ${money(fuel.maxAllowed)} maximum`, value: `−${money(overspend)}`, tone: 'minus' }
+      : { label: 'Fuel overspend', detail: entered ? `Within the allowance (${money(fuel.unused)} unused — not paid out)` : 'Calculated once the actual expense is entered', value: money(0), tone: 'info' },
+    { label: 'Fuel deduction', detail: 'Deducted from the VDP', value: over ? `−${money(overspend)}` : money(0), tone: 'total' },
+  ];
+  return (
+    <section className="calc-week calc-payment">
+      <header>
+        <div className="calc-week-title">Fuel allowance</div>
+        <div className="calc-week-total">{over ? `−${money(overspend)}` : money(0)}</div>
+      </header>
+      <StepLedger steps={steps} />
+      <button type="button" className="btn btn-ghost btn-sm no-print" style={{ marginTop: 8 }} onClick={() => setOpen(!open)}>
+        {open ? 'Hide' : 'Show'} daily fuel calculation
+      </button>
+      {open && (
+        <div className="table-wrap" style={{ marginTop: 8 }}>
+          <table className="table-compact">
+            <thead><tr><th>Date</th>{byOperator && <th>Operator</th>}<th className="num">Service miles</th><th className="num">MPG</th><th className="num">Allowed fuel</th></tr></thead>
+            <tbody>
+              {fuel.days.map((d) => (
+                <tr key={`${d.date}-${d.operator || ''}`}>
+                  <td>{date(d.date)}</td>
+                  {byOperator && <td>{d.operator}</td>}
+                  <td className="num">{num(d.serviceMiles)}</td>
+                  <td className="num">{num(d.mpg)}</td>
+                  <td className="num">{Number(d.allowed).toFixed(4)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr><td>Total</td>{byOperator && <td />}<td className="num">{num(fuel.serviceMiles)}</td><td /><td className="num">{money(fuel.maxAllowed)}</td></tr>
+            </tfoot>
+          </table>
+          <p className="muted small" style={{ marginTop: 6 }}>Daily amounts keep full precision; only the total is rounded to the cent.</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 // Old approved snapshots only carry text lines.
 function LegacyExplain({ calc }) {
   return (
@@ -101,6 +154,7 @@ export default function ExplainCalculation({ calc, settings }) {
             </header>
             <StepLedger steps={calc.steps} />
           </section>
+          {calc.fuelAllowance && <FuelAllowance fuel={calc.fuelAllowance} overspend={calc.fuelOverspend} />}
         </div>
       )}
     </Card>

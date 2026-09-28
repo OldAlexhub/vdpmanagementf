@@ -12,8 +12,12 @@ const HISTORY_LABELS = {
   PROVIDER_APPROVED: 'Approved by provider', AUTO_APPROVED: 'Auto-approved',
   ISSUE_RAISED: 'Provider reported an issue', ISSUE_ANSWERED: 'Issue answered (no change)',
   ADJUSTMENT_ADDED: 'Adjustment added', ADJUSTMENT_REMOVED: 'Adjustment removed', LEASE_CHANGED: 'Lift lease changed',
-  EXCEPTION_ACKNOWLEDGED: 'Issue acknowledged',
+  EXCEPTION_ACKNOWLEDGED: 'Issue acknowledged', FUEL_EXPENSE_SET: 'Fuel expense entered',
 };
+
+// Cents as integers so the live overspend preview never drifts; the server recalculates on save.
+const toCents = (v) => (v === null || v === undefined || v === '' ? null : Math.round(Number(String(v).replace(/[$,]/g, '')) * 100));
+const fromCents = (c) => (c / 100).toFixed(2);
 
 function Row({ label, values, strong, muted, render = (x) => x }) {
   return (
@@ -72,27 +76,30 @@ export function PerformanceCard({ view }) {
 }
 
 // Several operators: each is measured against their own contract; the provider is paid the total.
-export function OperatorsCard({ calc, perTrip }) {
+export function OperatorsCard({ calc, perTrip, settings }) {
   const ops = calc?.operators || [];
   if (ops.length < 2) return null;
   const weekNumbers = ops[0].weeks.map((w) => w.weekNumber);
+  // Some operators are paid under a different VDP plan than the provider.
+  const mixed = ops.some((o) => o.plan);
   return (
     <Card title="By operator" hint="Each operator’s hours are measured against their own contracted hours." body={false}>
       <div className="table-wrap">
         <table>
           <thead>
-            <tr><th>Operator</th><th>Route</th>{weekNumbers.map((n) => <th key={n} className="num">Week {n}</th>)}<th className="num">Earned</th><th className="num">Lift lease</th></tr>
+            <tr><th>Operator</th><th>Route</th>{mixed && <th>VDP plan</th>}{weekNumbers.map((n) => <th key={n} className="num">Week {n}</th>)}<th className="num">Earned</th><th className="num">Lift lease</th></tr>
           </thead>
           <tbody>
             {ops.map((o) => (
               <tr key={o.name}>
                 <td className="strong">{o.name}</td>
                 <td className="mono">{o.routes.join(', ') || '—'}</td>
+                {mixed && <td className="small">{o.plan ? <>{o.plan.name} <span className="source-tag source-override">Operator</span></> : <>{settings?.planName} <span className="source-tag source-plan">Provider</span></>}</td>}
                 {o.weeks.map((w) => (
                   <td key={w.weekNumber} className="num">
                     <div className="strong">{money(w.weeklyEarnings)}</div>
                     <div className="muted small">
-                      {perTrip
+                      {(o.paymentType ? o.paymentType === 'PER_TRIP' : perTrip)
                         ? `${num(w.trips)} trips × ${rate(w.incentiveRate)}`
                         : <>{num(w.actualHours)} of {num(w.contractedHours)} h · {pct(w.performancePercentage)}<br />{w.tierLabel} · {rate(w.incentiveRate)}{Number(w.bonusHours) > 0 ? ` · ${num(w.bonusHours)} bonus h` : ''}</>}
                     </div>
@@ -129,6 +136,70 @@ export function EarningsCard({ calc, perTrip }) {
   );
 }
 
+// Service mile fuel allowance: everything is calculated except the actual expense Accounting enters.
+export function FuelCard({ vdp, editable, onChanged }) {
+  const v = vdp.view;
+  const a = v.calculation?.fuelAllowance;
+  const saved = v.fuelExpense?.amount ?? a?.actualExpense ?? null;
+  const [value, setValue] = useState(saved ? fromCents(toCents(saved)) : '');
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const opAllowance = (v.settings?.operatorPlans || []).filter((o) => o.fuelMethod === 'SERVICE_MILE_ALLOWANCE');
+  if (v.settings?.fuelMethod?.value !== 'SERVICE_MILE_ALLOWANCE' && !opAllowance.length) return null;
+  const mpg = a ? (a.mpg ?? a.mpgs.join(' / ')) : (v.settings.operatorPlans ? opAllowance.map((o) => o.fuelMpg).join(' / ') : v.settings.fuelMpg?.value);
+  const weeks = v.settings.operatorPlans ? [] : v.performance?.weeks || [];
+  const miles = a ? a.weekMiles : weeks.map((w) => w.serviceMiles);
+  const total = a?.serviceMiles ?? (miles.length && miles.every((m) => m !== null && m !== undefined) ? miles.reduce((t, m) => t + Number(m), 0) : null);
+  const clean = value.trim().replace(/[$,]/g, '');
+  const typed = /^\d+(\.\d{0,2})?$/.test(clean) ? toCents(clean) : null;
+  const allowedCents = a ? toCents(a.maxAllowed) : null;
+  const overCents = typed !== null && allowedCents !== null ? Math.max(typed - allowedCents, 0) : null;
+  const dirty = typed !== toCents(saved);
+  const save = async (e) => {
+    e?.preventDefault();
+    setBusy(true);
+    setError(null);
+    try { onChanged(await api.patch(`/vdps/${vdp._id}/fuel-expense`, { amount: value })); } catch (err) { setError(err); }
+    setBusy(false);
+  };
+  const row = (label, val, cls = '') => <tr key={label}><td className="muted">{label}</td><td className={`num ${cls}`}>{val}</td></tr>;
+  return (
+    <Card title="Fuel" hint={`Service mile allowance · maximum = service miles ÷ ${num(mpg)}${v.settings.fuelMpg?.source === 'PROVIDER_OVERRIDE' ? ' (provider override)' : ''}${v.settings.operatorPlans ? ` · operators on this allowance: ${opAllowance.map((o) => o.name).join(', ')}` : ''}`}>
+      <div className="grid grid-2">
+        <table className="table-compact">
+          <tbody>
+            {miles.map((m, i) => row(`Week ${i + 1} service miles`, m === null || m === undefined ? <Badge tone="bad">Missing</Badge> : num(m)))}
+            {row('Total service miles', total === null ? '—' : num(total), 'strong')}
+            {row('Fuel efficiency', `${num(mpg)} MPG`)}
+            {row('Maximum allowed fuel', a ? money(a.maxAllowed) : '—', 'strong')}
+          </tbody>
+        </table>
+        <div className="stack">
+          <form onSubmit={save}>
+            <Field label="Actual fuel expense ($)" htmlFor="fuel-actual" help="Total the provider spent on fuel this cycle. Only the amount above the maximum is deducted.">
+              <div className="actions">
+                <input id="fuel-actual" value={value} onChange={(e) => setValue(e.target.value)} placeholder="507.89" disabled={!editable} style={{ width: 130 }} />
+                {editable && <button className="btn btn-primary" type="submit" disabled={busy || !dirty || (clean !== '' && typed === null)}>{saved ? 'Update' : 'Save'}</button>}
+              </div>
+            </Field>
+          </form>
+          <table className="table-compact">
+            <tbody>
+              {row('Fuel overspend', overCents === null ? '—' : money(fromCents(overCents)), overCents > 0 ? 'minus strong' : '')}
+              {row('VDP deduction', overCents === null ? '—' : overCents > 0 ? `−${money(fromCents(overCents))}` : money(0), overCents > 0 ? 'minus strong' : '')}
+              {overCents === 0 && typed !== null && row('Unused allowance (not paid)', money(fromCents(allowedCents - typed)), 'muted')}
+            </tbody>
+          </table>
+          {dirty && typed !== null && <p className="muted small">Not saved yet. Save to update the VDP.</p>}
+          {!a && <p className="muted small">The allowance appears once the issues above are resolved.</p>}
+          {v.fuelExpense?.enteredBy && !dirty && <p className="muted small">Entered by {v.fuelExpense.enteredBy.name} · {dateTime(v.fuelExpense.enteredAt)}</p>}
+          <ErrorAlert error={error} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function AdjustmentsCard({ vdp, types, editable, onChanged }) {
   const [form, setForm] = useState({ type: 'FARES', amount: '', description: '', date: todayLocal() });
   const [error, setError] = useState(null);
@@ -137,6 +208,9 @@ function AdjustmentsCard({ vdp, types, editable, onChanged }) {
   const [lease, setLease] = useState(null);
   const view = vdp.view;
   const typeInfo = (k) => types.find((t) => t.key === k) || { label: k, direction: 'DEDUCTION' };
+  // On a service mile allowance plan fuel is deducted from the actual expense, never entered here.
+  const allowance = view.settings?.fuelMethod?.value === 'SERVICE_MILE_ALLOWANCE';
+  const choices = types.filter((t) => !(allowance && t.key === 'FUEL'));
   const add = async (e) => {
     e.preventDefault();
     setBusy(true);
@@ -168,6 +242,19 @@ function AdjustmentsCard({ vdp, types, editable, onChanged }) {
               <td className="num minus">{leaseAmt ? `−${money(leaseAmt)}` : '—'}</td>
               <td className="num">{editable && l.frequency !== 'NONE' && <button className="btn btn-ghost btn-sm no-print" onClick={() => setLease({ weeksCharged: l.weeksCharged || '', note: '' })}>Change</button>}</td>
             </tr>
+            {view.calculation?.fuelAllowance && (
+              <tr>
+                <td className="strong">Fuel overspend <Badge tone="outline">Automatic</Badge></td>
+                <td className="small">
+                  {view.calculation.fuelAllowance.actualExpense === null
+                    ? 'Waiting for the actual fuel expense'
+                    : `${money(view.calculation.fuelAllowance.actualExpense)} actual − ${money(view.calculation.fuelAllowance.maxAllowed)} allowed`}
+                </td>
+                <td className="small muted">From service miles</td>
+                <td className={`num ${Number(view.calculation.fuelOverspend) > 0 ? 'minus' : ''}`}>{Number(view.calculation.fuelOverspend) > 0 ? `−${money(view.calculation.fuelOverspend)}` : money(0)}</td>
+                <td />
+              </tr>
+            )}
             {view.adjustments.map((a) => {
               const t = typeInfo(a.type);
               const add = t.direction === 'ADDITION';
@@ -190,8 +277,8 @@ function AdjustmentsCard({ vdp, types, editable, onChanged }) {
           <div className="filters">
             <Field label="Type" htmlFor="a-type">
               <select id="a-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-                <optgroup label="Deductions">{types.filter((t) => t.direction === 'DEDUCTION').map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</optgroup>
-                <optgroup label="Additions">{types.filter((t) => t.direction === 'ADDITION').map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</optgroup>
+                <optgroup label="Deductions">{choices.filter((t) => t.direction === 'DEDUCTION').map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</optgroup>
+                <optgroup label="Additions">{choices.filter((t) => t.direction === 'ADDITION').map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</optgroup>
               </select>
             </Field>
             <Field label="Amount ($)" htmlFor="a-amt"><input id="a-amt" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="25.20" style={{ width: 110 }} /></Field>
@@ -248,7 +335,8 @@ export function NetCard({ vdp }) {
               {line('Lift lease', c.lease, '-')}
               {line('Fares collected', c.fares, '-')}
               {line('Other deductions', c.otherDeductions, '-')}
-              {c.fuelReimbursementRate && line(`Fuel reimbursement (${num(c.fuelTrips)} trips × ${rate(c.fuelReimbursementRate)})`, c.fuelReimbursement, '+')}
+              {c.fuelAllowance && line('Fuel overspend', c.fuelOverspend, Number(c.fuelOverspend) > 0 ? '-' : '')}
+              {(c.fuelReimbursementRate || c.fuelReimbursementDetail) && line(`Fuel reimbursement (${c.fuelReimbursementDetail || `${num(c.fuelTrips)} trips × ${rate(c.fuelReimbursementRate)}`})`, c.fuelReimbursement, '+')}
               {line('Reimbursements', c.reimbursements, '+')}
               {line('Other income', c.otherIncome, '+')}
               <tr className="total"><td>Net VDP</td><td className="num" style={{ fontSize: 16 }}>{money(c.net)}</td></tr>
@@ -378,7 +466,7 @@ export default function VdpReview() {
             <div><div className="k">VDP plan</div><div className="v">{v.plan ? <>{v.plan.name} <span className="muted small">v{v.plan.versionNumber} · {PAYMENT_TYPE_LABELS[v.settings?.paymentType?.value]}</span></> : '—'}</div></div>
             <div><div className="k">TUI eligible</div><div className="v">{v.settings ? (v.settings.tuiEligible.value ? 'Yes' : 'No') : '—'}{v.settings?.tuiEligible.source === 'PROVIDER_OVERRIDE' && <span className="source-tag source-override"> · override</span>}</div></div>
             <div><div className="k">Bonus rate</div><div className="v">{v.settings?.bonusEnabled.value ? rate(v.settings.bonusRate.value) : 'None'}</div></div>
-            <div><div className="k">Fuel reimbursement</div><div className="v">{v.settings?.fuelReimbursementEnabled?.value ? `${rate(v.settings.fuelReimbursementRate.value)} / trip` : 'None'}</div></div>
+            <div><div className="k">Fuel</div><div className="v">{v.settings?.fuelMethod?.value === 'SERVICE_MILE_ALLOWANCE' ? `Service mile allowance · ${num(v.settings.fuelMpg.value)} MPG` : v.settings?.fuelReimbursementEnabled?.value ? `${rate(v.settings.fuelReimbursementRate.value)} / trip` : 'None'}</div></div>
           </div>
         </Card>
 
@@ -386,8 +474,9 @@ export default function VdpReview() {
           <div className="stack">
             {!v.calculation && !v.performance && <Card><Empty title="Not calculated">Resolve the issues above, then recalculate.</Empty></Card>}
             <PerformanceCard view={v} />
-            <OperatorsCard calc={v.calculation} perTrip={perTrip} />
+            <OperatorsCard calc={v.calculation} perTrip={perTrip} settings={v.settings} />
             <EarningsCard calc={v.calculation} perTrip={perTrip} />
+            <FuelCard key={`${vdp._id}-${vdp.view.fuelExpense?.amount ?? ''}`} vdp={vdp} editable={editable} onChanged={(d) => { setData(d); toast('Fuel expense saved'); }} />
             <AdjustmentsCard vdp={vdp} types={types.data || []} editable={editable} onChanged={(d) => { setData(d); toast('VDP updated'); }} />
             <ExplainCalculation calc={v.calculation} settings={v.settings} />
           </div>

@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../api';
 import { rate, num, money, date, todayLocal, cycleLabel, METRIC_LABELS, PAYMENT_TYPE_LABELS, LEASE_LABELS } from '../format';
 import { ActiveBadge, Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, Modal, PageHead, StatusBadge, useLoad, useToast } from '../components/ui';
-import { TierTable, planSummary } from './Plans';
+import { TierTable, planSummary, fuelMethodOf } from './Plans';
 import PortalAccess from '../components/PortalAccess';
 import BulkImport from '../components/BulkImport';
 
@@ -164,6 +164,8 @@ export function ProviderProfile() {
   const navigate = useNavigate();
   const { data: p, loading, error, reload } = useLoad(() => api.get(`/providers/${id}`), [id]);
   const [moving, setMoving] = useState(null);
+  const divisionPlans = useLoad(() => (p?.operators?.some((o) => o.planId) ? api.get('/vdp-plans', { divisionId: p.divisionId }) : Promise.resolve([])), [p?._id, p?.divisionId]);
+  const planName = (id) => divisionPlans.data?.find((x) => x._id === id)?.name || '…';
   const division = useLoad(() => (p ? api.get(`/divisions/${p.divisionId}`) : Promise.resolve(null)), [p?.divisionId]);
   const vdps = useLoad(() => (p ? api.get('/vdps', { providerId: p._id }) : Promise.resolve([])), [p?._id]);
 
@@ -209,7 +211,14 @@ export function ProviderProfile() {
                   <SettingRow label="Contracted hours" setting={s.contractedHours} render={(v) => `${num(v)} / week`} />
                   <SettingRow label="TUI eligible" setting={s.tuiEligible} render={(v) => (v ? <Badge tone="ok">Yes</Badge> : <Badge>No</Badge>)} />
                   <SettingRow label="Bonus rate" setting={s.bonusEnabled.value ? s.bonusRate : { ...s.bonusRate, value: 'None' }} render={(v) => (v === 'None' ? v : `${rate(v)} / hour above contract`)} />
-                  <SettingRow label="Fuel reimbursement" setting={s.fuelReimbursementEnabled?.value ? s.fuelReimbursementRate : { source: 'PLAN', value: 'None' }} render={(v) => (v === 'None' ? v : `${rate(v)} / trip`)} />
+                  {s.fuelMethod?.value === 'SERVICE_MILE_ALLOWANCE' ? (
+                    <>
+                      <SettingRow label="Fuel" setting={s.fuelMethod} render={() => 'Service mile allowance'} />
+                      <SettingRow label="Fuel efficiency" setting={s.fuelMpg} render={(v) => `${num(v)} MPG`} />
+                    </>
+                  ) : (
+                    <SettingRow label="Fuel reimbursement" setting={s.fuelReimbursementEnabled?.value ? s.fuelReimbursementRate : { source: 'PLAN', value: 'None' }} render={(v) => (v === 'None' ? v : `${rate(v)} / trip`)} />
+                  )}
                   <SettingRow label="Performance hours" setting={s.performanceHourMetric} render={(v) => METRIC_LABELS[v]} />
                 </tbody>
               </table>
@@ -228,7 +237,7 @@ export function ProviderProfile() {
       <Card title="Operators" hint="Each operator is measured against their own contracted hours; the provider is paid the total." body={false}>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Operator</th><th>Route / run</th><th>Contracted hours</th><th>Lift lease</th><th>Status</th><th /></tr></thead>
+            <thead><tr><th>Operator</th><th>Route / run</th><th>VDP plan</th><th>Contracted hours</th><th>Lift lease</th><th>Status</th><th /></tr></thead>
             <tbody>
               {(p.operators || []).map((o) => (
                 <tr key={o.id || o.name} className={o.transferredTo ? 'muted' : ''}>
@@ -238,6 +247,9 @@ export function ProviderProfile() {
                     {o.transferredTo && <div className="muted small">Until {date(o.endDate)} · moved to <Link to={`/providers/${o.transferredTo.providerId}`}>{o.transferredTo.providerName}</Link></div>}
                   </td>
                   <td className="mono">{o.routes.join(', ') || <Badge tone="warn">No route</Badge>}</td>
+                  <td>{o.planId
+                    ? <><Link to={`/plans/${o.planId}`}>{planName(o.planId)}</Link> <span className="source-tag source-override">Operator</span></>
+                    : <>{p.plan?.name || '—'} <span className="source-tag source-plan">Provider</span></>}</td>
                   <td>{o.contractedHours ? <>{num(o.contractedHours)} / week <span className="source-tag source-override">Operator</span></> : s?.contractedHours.value ? <>{num(s.contractedHours.value)} / week <span className="source-tag source-plan">{s.contractedHours.source === 'PLAN' ? 'Plan' : 'Provider'}</span></> : '—'}</td>
                   <td className="nowrap">{leaseText(o.liftLease)}</td>
                   <td>{o.transferredTo ? <Badge>Moved</Badge> : <ActiveBadge status={o.status} />}</td>
@@ -274,12 +286,12 @@ export function ProviderProfile() {
   );
 }
 
-const blankOperator = () => ({ name: '', routes: '', status: 'ACTIVE', contractedHours: '', liftLease: { amount: '', frequency: 'WEEKLY' } });
+const blankOperator = () => ({ name: '', routes: '', status: 'ACTIVE', contractedHours: '', planId: '', liftLease: { amount: '', frequency: 'WEEKLY' } });
 
 const emptyProvider = {
   name: '', providerNumber: '', divisionId: '', status: 'ACTIVE', serviceType: '', planId: '',
   operators: [blankOperator()],
-  overrides: { contractedHours: '', basePay: '', bonusRate: '', tuiEligibility: 'INHERIT' },
+  overrides: { contractedHours: '', basePay: '', bonusRate: '', tuiEligibility: 'INHERIT', fuelMpg: '' },
   contact: { email: '', phone: '', address: '' }, notes: '',
 };
 
@@ -291,11 +303,13 @@ const operatorForm = (o) => ({
   routes: (o.routes || []).join(', '),
   status: o.status || 'ACTIVE',
   contractedHours: o.contractedHours || '',
+  planId: o.planId || '',
   liftLease: { amount: o.liftLease?.amount || '', frequency: o.liftLease?.frequency || 'NONE' },
   transferredFrom: o.transferredFrom || null, // shown only; dates are set by "Move to another provider"
 });
 
-function OperatorsEditor({ operators, onChange, planHours }) {
+function OperatorsEditor({ operators, onChange, planHours, plans = [], providerPlanId }) {
+  const planChoices = plans.filter((p) => p._id !== providerPlanId && (p.status === 'ACTIVE' || operators.some((o) => o.planId === p._id)));
   const update = (i, patch) => onChange(operators.map((o, j) => (j === i ? { ...o, ...patch } : o)));
   const lease = (i, k, v) => update(i, { liftLease: { ...operators[i].liftLease, [k]: v } });
   return (
@@ -303,7 +317,7 @@ function OperatorsEditor({ operators, onChange, planHours }) {
       <div className="table-wrap">
         <table className="table-compact">
           <thead>
-            <tr><th>Operator</th><th>Route / run</th><th>Contracted h/week</th><th>Lift lease</th><th>Lease amount ($)</th><th>Status</th><th /></tr>
+            <tr><th>Operator</th><th>Route / run</th><th>VDP plan</th><th>Contracted h/week</th><th>Lift lease</th><th>Lease amount ($)</th><th>Status</th><th /></tr>
           </thead>
           <tbody>
             {operators.map((o, i) => (
@@ -313,6 +327,12 @@ function OperatorsEditor({ operators, onChange, planHours }) {
                   {o.transferredFrom && <div className="muted small">From {date(o.transferredFrom.effectiveDate)} (moved from {o.transferredFrom.providerName})</div>}
                 </td>
                 <td><input aria-label={`Operator ${i + 1} routes`} value={o.routes} onChange={(e) => update(i, { routes: e.target.value })} placeholder="918" style={{ width: 90 }} /></td>
+                <td>
+                  <select aria-label={`Operator ${i + 1} VDP plan`} value={o.planId} onChange={(e) => update(i, { planId: e.target.value })}>
+                    <option value="">Provider’s plan</option>
+                    {planChoices.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
+                  </select>
+                </td>
                 <td><input aria-label={`Operator ${i + 1} contracted hours`} value={o.contractedHours} onChange={(e) => update(i, { contractedHours: e.target.value })} placeholder={planHours ? `Plan: ${num(planHours)}` : 'Plan'} style={{ width: 90 }} /></td>
                 <td>
                   <select aria-label={`Operator ${i + 1} lease frequency`} value={o.liftLease.frequency} onChange={(e) => lease(i, 'frequency', e.target.value)}>
@@ -335,6 +355,7 @@ function OperatorsEditor({ operators, onChange, planHours }) {
       <p className="help muted small">
         Routes as shown in the Performance Report “Run/Route” column; separate several with commas. A route belongs to one operator.
         Each operator’s hours are measured against their own contracted hours (blank = plan), and their lift lease is charged separately.
+        An operator on a different VDP plan is paid entirely under that plan (rates, TUI, hours column, fuel); the provider’s overrides stay with the provider’s plan.
         The provider receives one VDP with the total.
       </p>
     </div>
@@ -364,6 +385,7 @@ export function ProviderEdit() {
         overrides: {
           contractedHours: p.overrides?.contractedHours || '', basePay: p.overrides?.basePay || '',
           bonusRate: p.overrides?.bonusRate || '', tuiEligibility: p.overrides?.tuiEligibility || 'INHERIT',
+          fuelMpg: p.overrides?.fuelMpg || '',
         },
         contact: { ...emptyProvider.contact, ...(p.contact || {}) },
       });
@@ -385,7 +407,8 @@ export function ProviderEdit() {
     setError(null);
     try {
       const { routes, operatorName, liftLease, movedAway, ...body } = form;
-      body.operators = form.operators.filter((o) => o.name.trim() || o.routes.trim()).map(({ transferredFrom, ...o }) => o);
+      body.operators = form.operators.filter((o) => o.name.trim() || o.routes.trim())
+        .map(({ transferredFrom, ...o }) => ({ ...o, planId: o.planId && o.planId !== form.planId ? o.planId : null }));
       const saved = id ? await api.put(`/providers/${id}`, body) : await api.post('/providers', body);
       toast('Provider saved');
       navigate(`/providers/${saved._id}`);
@@ -422,7 +445,7 @@ export function ProviderEdit() {
         </Card>
 
         <Card title="Operators" hint="The provider is the one who gets paid. Add each operator (driver) who works for them.">
-          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} />
+          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} plans={plans.data || []} providerPlanId={form.planId} />
           {form.movedAway?.length > 0 && (
             <p className="muted small" style={{ marginTop: 8 }}>
               Moved to another provider (kept for earlier cycles): {form.movedAway.map((o) => `${o.name} → ${o.transferredTo.providerName} from ${date(o.transferredTo.effectiveDate)}`).join('; ')}.
@@ -452,6 +475,11 @@ export function ProviderEdit() {
               <Field label="Base pay override" htmlFor="f-base" help={inheritHint(cur?.basePay && rate(cur.basePay))}>
                 <input id="f-base" value={form.overrides.basePay} onChange={setIn('overrides', 'basePay')} />
               </Field>
+              {(fuelMethodOf(cur) === 'SERVICE_MILE_ALLOWANCE' || form.overrides.fuelMpg) && (
+                <Field label="Fuel MPG override" htmlFor="f-mpg" help={`${inheritHint(cur?.fuelMpg, ' MPG')} Only when this provider’s vehicle is on a different fuel efficiency.`}>
+                  <input id="f-mpg" value={form.overrides.fuelMpg} onChange={setIn('overrides', 'fuelMpg')} />
+                </Field>
+              )}
               {cur?.bonusEnabled && (
                 <Field label="Bonus rate override" htmlFor="f-bonus" help={inheritHint(rate(cur.bonusRate))}>
                   <input id="f-bonus" value={form.overrides.bonusRate} onChange={setIn('overrides', 'bonusRate')} />
