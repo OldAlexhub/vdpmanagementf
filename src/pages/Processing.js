@@ -104,7 +104,10 @@ function RouteRow({ m, providers, importId, onResolved }) {
       <td className="mono strong">{m.route}</td>
       <td className="num">{m.days}</td>
       <td>
-        {m.status === 'MATCHED' && <><Badge tone="ok">Matched</Badge> {m.providerName}</>}
+        {m.status === 'MATCHED' && <><Badge tone="ok">Matched</Badge> {m.providerName}
+          {m.matchType && m.matchType !== 'EXACT' && m.profileRoutes?.length > 0 && (
+            <span className="muted small"> (profile route {m.profileRoutes.join(', ')})</span>
+          )}</>}
         {m.status === 'ASSIGNED' && <><Badge tone="info">Assigned</Badge> {m.providerName}</>}
         {m.status === 'IGNORED' && <Badge>Not a VDP route this cycle</Badge>}
         {needs && <><Badge tone="bad">Needs review</Badge> <span className="small">{m.message}</span></>}
