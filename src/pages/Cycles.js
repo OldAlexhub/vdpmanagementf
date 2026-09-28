@@ -142,7 +142,7 @@ export default function Cycles() {
       <div className="stack">
         <ScheduleCard />
         <ErrorAlert error={error} />
-        {loading ? <Loading /> : (
+        {loading ? <Loading /> : data && (
           <Card body={false}>
             {!periods.length ? (
               <Empty title="No cycles yet" actions={<button className="btn btn-primary" onClick={() => setGenerating(true)}>Generate cycles</button>}>

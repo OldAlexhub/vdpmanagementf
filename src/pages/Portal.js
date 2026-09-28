@@ -33,7 +33,7 @@ function PortalHome() {
     <div className="page">
       <PageHead title="My VDP statements" sub="Review each statement and approve it before the Closed for Submission date." />
       <ErrorAlert error={error} />
-      {loading ? <Loading /> : (
+      {loading ? <Loading /> : data && (
         <div className="stack">
           {waiting.map((v) => (
             <Alert key={v._id} tone="warn" action={<Link className="btn btn-sm btn-primary" to={`/vdps/${v._id}`}>Review & approve</Link>}>

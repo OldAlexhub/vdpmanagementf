@@ -68,8 +68,58 @@ export const FUEL_METHOD_LABELS = { NONE: 'None', PER_TRIP: 'Per trip reimbursem
 export function fuelSummary(v) {
   const m = fuelMethodOf(v);
   if (m === 'PER_TRIP') return `${rate(v.fuelReimbursementRate)} / trip reimbursement`;
-  if (m === 'SERVICE_MILE_ALLOWANCE') return `Service mile allowance · ${num(v.fuelMpg)} MPG`;
+  if (m === 'SERVICE_MILE_ALLOWANCE') return `Service mile allowance · ${num(v.fuelMpg)} MPG × fuel price by date`;
   return 'None';
+}
+
+// Fuel price per gallon by date (service mile allowance). Blank "To" = open-ended.
+const blankPrice = () => ({ pricePerGallon: '', effectiveFrom: '', effectiveTo: '' });
+const priceForm = (list) => (list || []).map((p) => ({ _id: p._id, pricePerGallon: p.pricePerGallon || '', effectiveFrom: p.effectiveFrom || '', effectiveTo: p.effectiveTo || '' }))
+  .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
+
+function FuelPriceRows({ prices, onChange }) {
+  const update = (i, k, val) => onChange(prices.map((p, j) => (j === i ? { ...p, [k]: val } : p)));
+  return (
+    <div className="stack">
+      <table className="table-compact">
+        <thead><tr><th>Fuel price ($/gallon)</th><th>From</th><th>To</th><th /></tr></thead>
+        <tbody>
+          {prices.map((p, i) => (
+            <tr key={p._id || i}>
+              <td><input aria-label={`Fuel price ${i + 1}`} value={p.pricePerGallon} onChange={(e) => update(i, 'pricePerGallon', e.target.value)} placeholder="4.794" style={{ width: 100 }} /></td>
+              <td><input aria-label={`Fuel price ${i + 1} from`} type="date" value={p.effectiveFrom} onChange={(e) => update(i, 'effectiveFrom', e.target.value)} /></td>
+              <td><input aria-label={`Fuel price ${i + 1} to`} type="date" value={p.effectiveTo} onChange={(e) => update(i, 'effectiveTo', e.target.value)} /></td>
+              <td className="num"><button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(prices.filter((_, j) => j !== i))}>Remove</button></td>
+            </tr>
+          ))}
+          {!prices.length && <tr><td colSpan={4} className="muted small">No fuel prices yet. Every service date needs a price.</td></tr>}
+        </tbody>
+      </table>
+      <div className="actions"><button type="button" className="btn btn-sm" onClick={() => onChange([...prices, blankPrice()])}>Add fuel price</button></div>
+      <p className="help muted small">Each service date uses the price whose dates cover it, so a cycle can span two prices (e.g. $4.794 to 08/31, $4.9249 from 09/01). Leave “To” blank on the latest price.</p>
+    </div>
+  );
+}
+
+function FuelPricesModal({ plan, onClose, onSaved }) {
+  const [prices, setPrices] = useState(() => priceForm(plan.fuelPrices));
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try { onSaved(await api.put(`/vdp-plans/${plan._id}/fuel-prices`, { fuelPrices: prices })); } catch (e) { setError(e); setBusy(false); }
+  };
+  return (
+    <Modal title={`Fuel prices — ${plan.name}`} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={busy} onClick={save}>Save fuel prices</button></>}>
+      <div className="stack">
+        <FuelPriceRows prices={prices} onChange={setPrices} />
+        <p className="muted small">Open VDPs are recalculated with the new prices. Approved VDPs keep the prices they were calculated with.</p>
+        <ErrorAlert error={error} />
+      </div>
+    </Modal>
+  );
 }
 
 const versionForm = (v) => ({
@@ -165,7 +215,7 @@ function VersionFields({ form, setForm, showDates = true }) {
           )}
           {form.fuelMethod === 'SERVICE_MILE_ALLOWANCE' && (
             <>
-              <Field label="Fuel divisor (MPG)" htmlFor="v-mpg" help="Maximum allowed fuel = service miles ÷ this number. Providers can override it on their profile.">
+              <Field label="Fuel efficiency (MPG)" htmlFor="v-mpg" help="Allowed gallons = service miles ÷ this number. Providers can override it on their profile.">
                 <input id="v-mpg" value={form.fuelMpg} onChange={set('fuelMpg')} placeholder="19" />
               </Field>
               <Field label="Mileage source" htmlFor="v-miles">
@@ -180,10 +230,15 @@ function VersionFields({ form, setForm, showDates = true }) {
           {form.fuelMethod === 'NONE' && 'No fuel reimbursement or fuel deduction.'}
           {form.fuelMethod === 'PER_TRIP' && 'Trips in the cycle × this rate is added to the VDP after Gross.'}
           {form.fuelMethod === 'SERVICE_MILE_ALLOWANCE' && <>
-            Maximum allowed fuel = service miles ÷ {form.fuelMpg || 'MPG'}.
+            Each service date: service miles ÷ {form.fuelMpg || 'MPG'} = allowed gallons × that day’s fuel price = allowed fuel.
             Accounting enters the provider’s actual fuel expense on the VDP; only the amount above the maximum is deducted.
           </>}
         </p>
+        {form.fuelMethod === 'SERVICE_MILE_ALLOWANCE' && form.fuelPrices && (
+          <div style={{ marginTop: 10 }}>
+            <FuelPriceRows prices={form.fuelPrices} onChange={(fuelPrices) => setForm({ ...form, fuelPrices })} />
+          </div>
+        )}
       </div>
       <Field label="Notes" htmlFor="v-notes"><textarea id="v-notes" value={form.notes} onChange={set('notes')} /></Field>
     </div>
@@ -193,7 +248,7 @@ function VersionFields({ form, setForm, showDates = true }) {
 function VersionModal({ plan, version, mode, onClose, onSaved }) {
   // mode: 'create-plan' | 'add' | 'edit'
   const [form, setForm] = useState(() => {
-    const f = versionForm(version);
+    const f = { ...versionForm(version), fuelPrices: priceForm(plan?.fuelPrices) };
     if (mode === 'add') { f.effectiveFrom = ''; f.effectiveTo = ''; f.notes = ''; }
     return f;
   });
@@ -207,9 +262,12 @@ function VersionModal({ plan, version, mode, onClose, onSaved }) {
     setError(null);
     try {
       let saved;
-      if (mode === 'create-plan') saved = await api.post('/vdp-plans', { ...meta, version: form });
-      else if (mode === 'add') saved = await api.post(`/vdp-plans/${plan._id}/versions`, form);
-      else saved = await api.put(`/vdp-plans/${plan._id}/versions/${version._id}`, form);
+      // Fuel prices belong to the plan; they are saved with the fuel options when the allowance is used.
+      const { fuelPrices, ...rules } = form;
+      const body = form.fuelMethod === 'SERVICE_MILE_ALLOWANCE' ? { ...rules, fuelPrices } : rules;
+      if (mode === 'create-plan') saved = await api.post('/vdp-plans', { ...meta, version: rules, ...(body.fuelPrices ? { fuelPrices } : {}) });
+      else if (mode === 'add') saved = await api.post(`/vdp-plans/${plan._id}/versions`, body);
+      else saved = await api.put(`/vdp-plans/${plan._id}/versions/${version._id}`, body);
       onSaved(saved);
     } catch (e) {
       setError(e);
@@ -280,7 +338,7 @@ export function PlanList() {
         </Field>
       </div>
       <ErrorAlert error={error} />
-      {loading ? <Loading /> : (
+      {loading ? <Loading /> : data && (
         <Card body={false}>
           {data.length === 0 ? <Empty title="No VDP plans">Create a plan to define how providers in a division are paid.</Empty> : (
             <div className="table-wrap">
@@ -322,6 +380,7 @@ export function PlanDetail() {
   const providers = useLoad(() => api.get('/providers', { planId: id }), [id]);
   const [modal, setModal] = useState(null);
   const [editMeta, setEditMeta] = useState(null);
+  const [pricing, setPricing] = useState(false);
 
   if (loading) return <div className="page"><Loading /></div>;
   if (error) return <div className="page"><ErrorAlert error={error} /></div>;
@@ -356,6 +415,24 @@ export function PlanDetail() {
                 <div><div className="k">Bonus rate</div><div className="v">{v.bonusEnabled ? `${rate(v.bonusRate)}/hour above contract` : 'None'}</div></div>
                 <div><div className="k">Fuel</div><div className="v">{fuelSummary(v)}</div></div>
               </div>
+              {fuelMethodOf(v) === 'SERVICE_MILE_ALLOWANCE' && v._id === plan.currentVersionId && (
+                <div style={{ marginBottom: 14 }}>
+                  <div className="actions" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
+                    <h3 style={{ margin: 0 }}>Fuel prices</h3>
+                    <button className="btn btn-sm" onClick={() => setPricing(true)}>Edit fuel prices</button>
+                  </div>
+                  {plan.fuelPrices?.length ? (
+                    <table className="table-compact">
+                      <thead><tr><th>Dates</th><th className="num">Price per gallon</th></tr></thead>
+                      <tbody>
+                        {plan.fuelPrices.map((p) => (
+                          <tr key={p._id}><td>{date(p.effectiveFrom)} – {p.effectiveTo ? date(p.effectiveTo) : 'open'}</td><td className="num">{rate(p.pricePerGallon)}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : <Alert tone="warn">No fuel prices yet. VDPs on this plan need a price for every service date.</Alert>}
+                </div>
+              )}
               {(v.incentiveEnabled || v.incentiveTiers.length > 0) && (
                 <>
                   <h3 style={{ margin: '4px 0 8px' }}>Incentive tiers {!v.incentiveEnabled && <span className="muted small">(kept, TUI off)</span>}</h3>
@@ -382,6 +459,7 @@ export function PlanDetail() {
           )}
         </Card>
       </div>
+      {pricing && <FuelPricesModal plan={plan} onClose={() => setPricing(false)} onSaved={(d) => { setData(d); setPricing(false); toast('Fuel prices saved'); }} />}
       {modal && <VersionModal plan={plan} mode={modal.mode} version={modal.version} onClose={() => setModal(null)}
         onSaved={(p) => { setModal(null); setData(p); toast('Plan version saved'); }} />}
       {editMeta && (

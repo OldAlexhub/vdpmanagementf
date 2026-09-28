@@ -64,7 +64,14 @@ function FuelAllowance({ fuel, overspend }) {
   const steps = [
     { label: 'Service miles', detail: `Performance Report (Miles → Service) · week 1 ${num(fuel.weekMiles[0])} + week 2 ${num(fuel.weekMiles[1])}`, value: num(fuel.serviceMiles), tone: 'info' },
     { label: 'Fuel efficiency', detail: fuel.mpg ? 'VDP plan' : 'Each operator’s VDP plan', value: `${fuel.mpg ? num(fuel.mpg) : fuel.mpgs.join(' / ')} MPG`, tone: 'info' },
-    { label: 'Maximum allowed fuel', detail: fuel.mpg ? `${num(fuel.serviceMiles)} service miles ÷ ${num(fuel.mpg)}` : 'Each operator’s service miles ÷ their MPG', value: money(fuel.maxAllowed), tone: 'subtotal' },
+    { label: 'Allowed gallons', detail: fuel.mpg ? `${num(fuel.serviceMiles)} miles ÷ ${num(fuel.mpg)} MPG` : 'Each operator’s miles ÷ their MPG', value: Number(fuel.gallons).toFixed(4), tone: 'info' },
+    {
+      label: 'Fuel price',
+      detail: fuel.pricesUsed.length > 1 ? 'Price in effect on each service date (changes during this cycle)' : 'Price in effect on each service date',
+      value: fuel.pricesUsed.map((p) => `${rate(p)}/gal`).join(', '),
+      tone: 'info',
+    },
+    { label: 'Maximum allowed fuel', detail: 'Sum of each day’s gallons × that day’s price', value: money(fuel.maxAllowed), tone: 'subtotal' },
     { label: 'Actual fuel expense', detail: 'Entered by Accounting', value: entered ? money(fuel.actualExpense) : 'Not entered', tone: 'info' },
     entered && over
       ? { label: 'Fuel overspend', detail: `${money(fuel.actualExpense)} actual − ${money(fuel.maxAllowed)} maximum`, value: `−${money(overspend)}`, tone: 'minus' }
@@ -84,7 +91,7 @@ function FuelAllowance({ fuel, overspend }) {
       {open && (
         <div className="table-wrap" style={{ marginTop: 8 }}>
           <table className="table-compact">
-            <thead><tr><th>Date</th>{byOperator && <th>Operator</th>}<th className="num">Service miles</th><th className="num">MPG</th><th className="num">Allowed fuel</th></tr></thead>
+            <thead><tr><th>Date</th>{byOperator && <th>Operator</th>}<th className="num">Service miles</th><th className="num">MPG</th><th className="num">Allowed gallons</th><th className="num">Fuel price</th><th className="num">Allowed fuel</th></tr></thead>
             <tbody>
               {fuel.days.map((d) => (
                 <tr key={`${d.date}-${d.operator || ''}`}>
@@ -92,12 +99,14 @@ function FuelAllowance({ fuel, overspend }) {
                   {byOperator && <td>{d.operator}</td>}
                   <td className="num">{num(d.serviceMiles)}</td>
                   <td className="num">{num(d.mpg)}</td>
+                  <td className="num">{Number(d.gallons).toFixed(6)}</td>
+                  <td className="num">{rate(d.pricePerGallon)}</td>
                   <td className="num">{Number(d.allowed).toFixed(4)}</td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
-              <tr><td>Total</td>{byOperator && <td />}<td className="num">{num(fuel.serviceMiles)}</td><td /><td className="num">{money(fuel.maxAllowed)}</td></tr>
+              <tr><td>Total</td>{byOperator && <td />}<td className="num">{num(fuel.serviceMiles)}</td><td /><td className="num">{Number(fuel.gallons).toFixed(6)}</td><td /><td className="num">{money(fuel.maxAllowed)}</td></tr>
             </tfoot>
           </table>
           <p className="muted small" style={{ marginTop: 6 }}>Daily amounts keep full precision; only the total is rounded to the cent.</p>

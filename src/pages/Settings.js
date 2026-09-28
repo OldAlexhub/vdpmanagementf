@@ -40,7 +40,7 @@ function UsersCard() {
   return (
     <Card title="Users" body={false} actions={<button className="btn btn-sm btn-primary" onClick={() => setAdding({ name: '', email: '', password: '', role: 'USER' })}>Add user</button>}>
       <ErrorAlert error={error} />
-      {loading ? <Loading /> : (
+      {loading ? <Loading /> : data && (
         <table>
           <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th /></tr></thead>
           <tbody>

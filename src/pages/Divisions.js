@@ -75,7 +75,7 @@ export default function Divisions() {
         actions={isAdmin && <><button className="btn" onClick={() => setImporting(true)}>Bulk import</button><button className="btn btn-primary" onClick={() => setEditing({})}>New division</button></>}
       />
       <ErrorAlert error={error} />
-      {loading ? <Loading /> : (
+      {loading ? <Loading /> : data && (
         <Card body={false}>
           {data.length === 0 ? (
             <Empty title="No divisions yet" actions={isAdmin && <button className="btn btn-primary" onClick={() => setEditing({})}>Create the first division</button>}>

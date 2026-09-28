@@ -164,13 +164,15 @@ export function FuelCard({ vdp, editable, onChanged }) {
   };
   const row = (label, val, cls = '') => <tr key={label}><td className="muted">{label}</td><td className={`num ${cls}`}>{val}</td></tr>;
   return (
-    <Card title="Fuel" hint={`Service mile allowance · maximum = service miles ÷ ${num(mpg)}${v.settings.fuelMpg?.source === 'PROVIDER_OVERRIDE' ? ' (provider override)' : ''}${v.settings.operatorPlans ? ` · operators on this allowance: ${opAllowance.map((o) => o.name).join(', ')}` : ''}`}>
+    <Card title="Fuel" hint={`Service mile allowance · service miles ÷ ${num(mpg)} MPG${v.settings.fuelMpg?.source === 'PROVIDER_OVERRIDE' ? ' (provider override)' : ''} × fuel price by date${v.settings.operatorPlans ? ` · operators on this allowance: ${opAllowance.map((o) => o.name).join(', ')}` : ''}`}>
       <div className="grid grid-2">
         <table className="table-compact">
           <tbody>
             {miles.map((m, i) => row(`Week ${i + 1} service miles`, m === null || m === undefined ? <Badge tone="bad">Missing</Badge> : num(m)))}
             {row('Total service miles', total === null ? '—' : num(total), 'strong')}
             {row('Fuel efficiency', `${num(mpg)} MPG`)}
+            {row('Allowed gallons', a ? Number(a.gallons).toFixed(4) : '—')}
+            {row('Fuel price', a ? a.pricesUsed.map((p) => `${rate(p)}/gal`).join(', ') : '—')}
             {row('Maximum allowed fuel', a ? money(a.maxAllowed) : '—', 'strong')}
           </tbody>
         </table>

@@ -60,7 +60,7 @@ export function ProviderList() {
         </Field>
       </div>
       <ErrorAlert error={error} />
-      {loading ? <Loading /> : (
+      {loading ? <Loading /> : data && (
         <Card body={false}>
           {data.length === 0 ? (
             <Empty title="No providers found" actions={<button className="btn btn-primary" onClick={() => navigate('/providers/new')}>Add a provider</button>}>
