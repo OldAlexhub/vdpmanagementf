@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { date, money, num, pct, rate } from '../format';
 import { Card } from './ui';
 
-function StepLedger({ steps }) {
+function StepLedger({ steps = [] }) {
   return (
     <table className="calc-ledger">
       <tbody>
@@ -118,30 +118,51 @@ function FuelAllowance({ fuel, overspend }) {
 
 // Old approved snapshots only carry text lines.
 function LegacyExplain({ calc }) {
+  const weeks = Array.isArray(calc.weeks) ? calc.weeks : [];
+  const payment = Array.isArray(calc.explanation) ? calc.explanation : [];
   return (
     <>
-      {calc.weeks.map((w) => (
+      {weeks.map((w) => (
         <div className="explain" key={w.weekNumber}>
           <h4>Week {w.weekNumber}</h4>
-          <ol>{w.explanation.map((line) => <li key={line}>{line}</li>)}</ol>
+          <ol>{(Array.isArray(w.explanation) ? w.explanation : []).map((line) => <li key={line}>{line}</li>)}</ol>
         </div>
       ))}
-      <div className="explain"><h4>Payment</h4><ol>{calc.explanation.map((line) => <li key={line}>{line}</li>)}</ol></div>
+      {payment.length > 0 && <div className="explain"><h4>Payment</h4><ol>{payment.map((line) => <li key={line}>{line}</li>)}</ol></div>}
     </>
+  );
+}
+
+function UberExplain({ calc }) {
+  const steps = Array.isArray(calc.steps) ? calc.steps : [];
+  if (!steps.length) return <LegacyExplain calc={calc} />;
+  return (
+    <div className="stack">
+      <section className="calc-week calc-payment">
+        <header>
+          <div className="calc-week-title">Uber payment summary</div>
+          <div className="calc-week-total">{money(calc.net)}</div>
+        </header>
+        <StepLedger steps={steps} />
+        <p className="muted small" style={{ marginTop: 8 }}>Open Details on a driver/week above for its qualification, tiers, and Gross calculation.</p>
+      </section>
+    </div>
   );
 }
 
 export default function ExplainCalculation({ calc, settings }) {
   if (!calc) return null;
-  const structured = calc.steps && calc.weeks.every((w) => w.steps);
+  const weeks = Array.isArray(calc.weeks) ? calc.weeks : [];
+  const uber = calc.calculationType === 'UBER';
+  const structured = Array.isArray(calc.steps) && weeks.length > 0 && weeks.every((w) => Array.isArray(w.steps));
   const perTrip = settings?.paymentType?.value === 'PER_TRIP';
   const tiers = settings?.tuiEligible?.value ? settings.incentiveTiers?.value : null;
   return (
     <Card title="Explain calculation" hint="Every dollar, step by step. Each week is calculated on its own.">
-      {!structured ? <LegacyExplain calc={calc} /> : (
+      {uber ? <UberExplain calc={calc} /> : !structured ? <LegacyExplain calc={calc} /> : (
         <div className="stack">
           <div className="calc-weeks">
-            {calc.weeks.map((w) => (
+            {weeks.map((w) => (
               <section key={w.weekNumber} className="calc-week">
                 <header>
                   <div>

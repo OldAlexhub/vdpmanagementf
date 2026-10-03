@@ -83,6 +83,149 @@ function UploadCard({ summary, onUploaded }) {
   );
 }
 
+function UberDriverRow({ match, providers, cycleId, onChanged }) {
+  const [providerId, setProviderId] = useState(match.suggestedProviderId || '');
+  const [operatorId, setOperatorId] = useState(match.suggestedOperatorId || '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const provider = providers.find((item) => item._id === providerId);
+  const operators = (provider?.operators || []).filter((operator) => operator.status === 'ACTIVE' && !operator.transferredTo);
+  const assign = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post('/uber-driver-matches', { cycleId, driverUuid: match.driverUuid, providerId, operatorId: operators.length ? operatorId : undefined });
+      onChanged();
+    } catch (e) { setError(e); }
+    setBusy(false);
+  };
+  return (
+    <tr>
+      <td>
+        <div className="strong">{match.sourceName || 'Name not supplied'}</div>
+        <div className="mono muted small">{match.driverUuid}</div>
+        {match.sourceName && <div className="muted small">Name from upload; profile name remains authoritative</div>}
+      </td>
+      <td>{match.weeks.map((week) => date(week, 'md')).join(', ')}</td>
+      <td>{match.status === 'MATCHED'
+        ? <><Badge tone="ok">Matched</Badge> {match.providerName} | {match.operatorName}{match.matchMethod === 'AUTO_EXACT_NAME' && <div className="muted small">Automatic exact name match</div>}</>
+        : match.status === 'SUGGESTED'
+          ? <><Badge tone="warn">Suggested</Badge> {match.suggestedProviderName} | {match.suggestedOperatorName}<div className="muted small">{match.suggestionReason} ({Math.round(match.suggestionConfidence * 100)}%)</div></>
+          : <><Badge tone="bad">Needs review</Badge>{match.status === 'AMBIGUOUS' && ' UUID is assigned more than once'}</>}</td>
+      <td className="num">
+        {match.status !== 'MATCHED' && <div className="actions" style={{ justifyContent: 'flex-end' }}>
+          <select aria-label={`Provider for Uber driver ${match.driverUuid}`} value={providerId} onChange={(e) => { setProviderId(e.target.value); setOperatorId(''); }}>
+            <option value="">Choose provider...</option>
+            {providers.map((item) => <option key={item._id} value={item._id}>{item.name}</option>)}
+          </select>
+          {operators.length > 0 && <select aria-label={`Operator for Uber driver ${match.driverUuid}`} value={operatorId} onChange={(e) => setOperatorId(e.target.value)}>
+            <option value="">Choose operator...</option>
+            {operators.map((operator) => <option key={operator._id} value={operator._id}>{operator.name}</option>)}
+          </select>}
+          <button className="btn btn-sm btn-primary" disabled={busy || !providerId || (operators.length > 0 && !operatorId)} onClick={assign}>{busy ? 'Saving...' : match.status === 'SUGGESTED' ? 'Confirm match' : 'Match'}</button>
+        </div>}
+        {error && <div className="small" style={{ color: 'var(--bad)' }}>{error.message}</div>}
+      </td>
+    </tr>
+  );
+}
+
+function UberUploadCard({ summary, onChanged }) {
+  const input = useRef();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(null);
+  const [error, setError] = useState(null);
+  const [showAll, setShowAll] = useState(false);
+  const uber = summary.uberPerformance;
+  const providers = useLoad(() => api.get('/providers', { divisionId: summary.division._id, status: 'ACTIVE' }), [summary.division._id]);
+  const upload = async (files) => {
+    if (!files?.length) return;
+    setBusy(true);
+    setError(null);
+    const form = new FormData();
+    form.append('cycleId', summary.cycle._id);
+    [...files].forEach((file) => form.append('files', file));
+    try {
+      const result = await api.post('/uber-performance-imports', form);
+      onChanged(result.files);
+    } catch (e) { setError(e); }
+    setBusy(false);
+    if (input.current) input.current.value = '';
+  };
+  const invalidFiles = uber.files.filter((file) => file.validationStatus === 'INVALID' && file.status === 'INVALID');
+  const removeFile = async (file) => {
+    const invalid = file.validationStatus === 'INVALID';
+    const message = invalid
+      ? `Clear the failed upload “${file.fileName}”? You can upload a corrected copy immediately afterward.`
+      : `Remove “${file.fileName}” from this cycle’s active Uber data? Any VDPs using it will need recalculation.`;
+    if (!window.confirm(message)) return;
+    setRemoving(file._id);
+    setError(null);
+    try {
+      await api.del(`/uber-performance-imports/${file._id}`);
+      toast(invalid ? 'Failed upload cleared' : 'Uber file removed');
+      onChanged();
+    } catch (e) { setError(e); }
+    setRemoving(null);
+  };
+  const clearInvalid = async () => {
+    if (!window.confirm(`Clear ${invalidFiles.length} failed Uber upload${invalidFiles.length === 1 ? '' : 's'}? Valid files will stay active.`)) return;
+    setRemoving('all');
+    setError(null);
+    try {
+      const result = await api.del(`/uber-performance-imports/invalid?cycleId=${encodeURIComponent(summary.cycle._id)}`);
+      toast(`${result.deletedCount} failed upload${result.deletedCount === 1 ? '' : 's'} cleared`);
+      onChanged();
+    } catch (e) { setError(e); }
+    setRemoving(null);
+  };
+  const matches = showAll ? uber.driverMatches : uber.driverMatches.filter((match) => match.status !== 'MATCHED');
+  return (
+    <Card title="Uber weekly data" hint="Upload one or more weekly Uber files. Each driver/week is validated and calculated independently." body={false}
+      actions={<>{uber.loaded ? <Badge tone="ok" dot>{uber.activeFileCount} active file(s)</Badge> : <Badge tone="bad" dot>Missing</Badge>}</>}>
+      <div className="card-body stack">
+        <div className="upload-drop">
+          <input ref={input} type="file" accept=".xlsx,.xls,.csv" multiple hidden onChange={(e) => upload(e.target.files)} />
+          <button className="btn btn-primary" disabled={busy || Boolean(removing)} onClick={() => input.current.click()}>{busy ? 'Validating...' : 'Upload Uber data'}</button>
+          <div className="muted small" style={{ marginTop: 8 }}>.xlsx, .xls, or .csv | multiple weekly files allowed</div>
+        </div>
+        {invalidFiles.length > 0 && <Alert tone="warn" action={<div className="actions">
+          <button className="btn btn-sm" disabled={Boolean(removing)} onClick={clearInvalid}>{removing === 'all' ? 'Clearing...' : `Clear ${invalidFiles.length} failed upload${invalidFiles.length === 1 ? '' : 's'}`}</button>
+          <button className="btn btn-sm btn-primary" disabled={busy || Boolean(removing)} onClick={() => input.current?.click()}>Choose corrected files</button>
+        </div>}>
+          Failed uploads are not used in calculations. Clear them, correct the source files, and upload again.
+        </Alert>}
+        <ErrorAlert error={error} />
+      </div>
+      {uber.files.length > 0 && <div className="table-wrap" style={{ borderTop: '1px solid var(--border)' }}>
+        <table className="table-compact">
+          <thead><tr><th>File</th><th>Status</th><th className="num">Rows</th><th>Weeks</th><th className="num">Drivers</th><th>Uploaded</th><th /></tr></thead>
+          <tbody>{uber.files.map((file) => <tr key={file._id}>
+            <td className="strong">{file.fileName}</td>
+            <td>{file.validationStatus === 'VALID' && file.status === 'ACTIVE' ? <><Badge tone="ok">Valid</Badge>{file.warnings?.length > 0 && <details className="small" style={{ color: 'var(--warn)', marginTop: 4 }}><summary>{file.warnings.length} source row{file.warnings.length === 1 ? '' : 's'} used \N as 0</summary>{file.warnings.map((warning) => <div key={warning}>{warning}</div>)}</details>}</> : file.status === 'REPLACED' ? <Badge>Removed</Badge> : <><Badge tone="bad">Invalid</Badge><div className="small" style={{ color: 'var(--bad)' }}>{file.processingErrors.join(' ')}</div></>}</td>
+            <td className="num">{file.rowCount}</td>
+            <td>{file.weeksDetected.map((week) => date(week, 'md')).join(', ') || '-'}</td>
+            <td className="num">{file.driversDetected}</td>
+            <td className="small">{dateTime(file.uploadedAt)}<div className="muted">{file.uploadedBy?.name}</div></td>
+            <td className="num">{['ACTIVE', 'INVALID'].includes(file.status) && <button className="btn btn-ghost btn-sm" disabled={Boolean(removing)} onClick={() => removeFile(file)}>{removing === file._id ? 'Removing...' : file.validationStatus === 'INVALID' ? 'Clear' : 'Remove'}</button>}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>}
+      {uber.loaded && <div style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="card-body actions" style={{ justifyContent: 'space-between' }}>
+          <div><strong>Driver matching</strong><div className="muted small">{uber.unresolvedCount ? `${uber.unresolvedCount} driver(s) need a provider/operator match.` : `All ${uber.driversDetected} drivers are matched.`}</div></div>
+          <button className="btn btn-sm" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show only issues' : `Show all ${uber.driversDetected}`}</button>
+        </div>
+        {matches.length > 0 && <div className="table-wrap"><table className="table-compact">
+          <thead><tr><th>Uber driver</th><th>Weeks</th><th>Provider / operator</th><th /></tr></thead>
+          <tbody>{matches.map((match) => <UberDriverRow key={match.driverUuid} match={match} providers={providers.data || []} cycleId={summary.cycle._id} onChanged={onChanged} />)}</tbody>
+        </table></div>}
+      </div>}
+    </Card>
+  );
+}
+
 function RouteRow({ m, providers, importId, onResolved }) {
   const [providerId, setProviderId] = useState(m.candidates?.[0]?.id || '');
   const [save, setSave] = useState(true);
@@ -243,7 +386,11 @@ export default function Processing() {
 
   const v = summary?.vdps;
   const perf = summary?.performance;
-  const canProcess = perf?.loaded && !perf.unresolvedCount;
+  const uber = summary?.uberPerformance;
+  const requirements = summary?.inputRequirements;
+  const standardReady = !requirements?.standardProviderCount || (perf?.loaded && !perf.unresolvedCount);
+  const uberReady = !requirements?.uberProviderCount || (uber?.loaded && !uber.unresolvedCount);
+  const canProcess = standardReady && uberReady;
 
   return (
     <div className="page">
@@ -266,21 +413,24 @@ export default function Processing() {
         <div className="stack">
           <div className="grid grid-4">
             <Stat label="Providers expected" value={summary.providersExpected} note="Active providers in division" />
-            <Stat label="Performance" value={perf.loaded ? 'Loaded' : 'Missing'} tone={perf.loaded ? 'ok' : 'bad'} note={perf.loaded ? `${perf.routes.length} routes` : 'Upload the report'} />
+            <Stat label="Source data" value={canProcess ? 'Ready' : 'Missing'} tone={canProcess ? 'ok' : 'bad'} note={`${requirements.standardProviderCount} standard | ${requirements.uberProviderCount} Uber provider(s)`} />
             <Stat label="Needs review" value={v.NEEDS_REVIEW} tone={v.NEEDS_REVIEW ? 'bad' : undefined} note={`${v.calculated} calculated`} />
             <Stat label="Approved" value={`${v.APPROVED + v.DISPUTED + v.PROCESSED + v.PAID} / ${v.total || summary.providersExpected}`}
               tone={v.total && v.APPROVED + v.DISPUTED + v.PROCESSED + v.PAID === v.total ? 'ok' : undefined}
               note={`${v.APPROVED} awaiting provider · ${v.DISPUTED} issues · ${v.PROCESSED} to pay`} />
           </div>
 
-          <UploadCard summary={summary} onUploaded={(doc) => { toast(`Report loaded: ${doc.rowCount} rows in this cycle`); refresh(); }} />
-          <RoutesCard summary={summary} onChanged={reload} />
+          {requirements.standardProviderCount > 0 && <UploadCard summary={summary} onUploaded={(doc) => { toast(`Report loaded: ${doc.rowCount} rows in this cycle`); refresh(); }} />}
+          {requirements.standardProviderCount > 0 && <RoutesCard summary={summary} onChanged={reload} />}
+          {requirements.uberProviderCount > 0 && <UberUploadCard summary={summary} onChanged={(files) => { if (files) toast(`${files.filter((file) => file.validationStatus === 'VALID').length} Uber file(s) validated`); refresh(); }} />}
 
           <Card title="3 · Process VDPs"
             hint="Calculates every active provider’s VDP from the report, their plan and their profile. Approved VDPs are never changed."
             actions={<button className="btn btn-primary" disabled={!canProcess || processing} onClick={process}>{processing ? 'Processing…' : v.total ? 'Re-process VDPs' : 'Process VDPs'}</button>}>
-            {!perf.loaded && <Alert tone="warn">Upload the Performance Report first.</Alert>}
+            {requirements.standardProviderCount > 0 && !perf.loaded && <Alert tone="warn">Upload the Performance Report for standard plans first.</Alert>}
             {perf.loaded && perf.unresolvedCount > 0 && <Alert tone="warn">Resolve the routes that need review above before processing.</Alert>}
+            {requirements.uberProviderCount > 0 && !uber.loaded && <Alert tone="warn">Upload valid Uber weekly data first.</Alert>}
+            {uber.loaded && uber.unresolvedCount > 0 && <Alert tone="warn">Match the Uber drivers that need review above before processing.</Alert>}
             {v.stale > 0 && <Alert tone="warn">{v.stale} VDP(s) have changed inputs since they were calculated (report, plan or provider). Re-process to update them.</Alert>}
             {processError && <ErrorAlert error={processError} />}
             {canProcess && !v.stale && !processError && <p className="muted small">{v.total ? `${v.total} VDPs: ${v.NEEDS_REVIEW} need review, ${v.READY} ready, ${v.APPROVED} awaiting provider, ${v.DISPUTED} with provider issues, ${v.PROCESSED} processed, ${v.PAID} paid.` : 'Ready to process.'}</p>}

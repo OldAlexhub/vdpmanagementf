@@ -13,6 +13,7 @@ const HISTORY_LABELS = {
   ISSUE_RAISED: 'Provider reported an issue', ISSUE_ANSWERED: 'Issue answered (no change)',
   ADJUSTMENT_ADDED: 'Adjustment added', ADJUSTMENT_REMOVED: 'Adjustment removed', LEASE_CHANGED: 'Lift lease changed',
   EXCEPTION_ACKNOWLEDGED: 'Issue acknowledged', FUEL_EXPENSE_SET: 'Fuel expense entered',
+  UBER_WEEKLY_ADJUSTMENT_SET: 'Uber weekly adjustment saved',
 };
 
 // Cents as integers so the live overspend preview never drifts; the server recalculates on save.
@@ -25,6 +26,129 @@ function Row({ label, values, strong, muted, render = (x) => x }) {
       <td className={muted ? 'muted' : ''}>{label}</td>
       {values.map((v, i) => <td key={i} className={`num ${strong ? 'strong' : ''}`}>{render(v)}</td>)}
     </tr>
+  );
+}
+
+const ratioPct = (value) => (value === null || value === undefined ? '-' : pct(Number(value) * 100));
+
+function UberCalculationRow({ row, tollAdjustments, vdpId, editable, onChanged }) {
+  const [expanded, setExpanded] = useState(false);
+  const [approvedExtraHours, setApprovedExtraHours] = useState(row.approvedExtraHours || '0');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      onChanged(await api.put(`/vdps/${vdpId}/uber-weekly-adjustment`, {
+        calculationUnitId: row.calculationUnitId,
+        driverUuid: row.driverUuid,
+        week: row.week,
+        approvedExtraHours,
+      }));
+    } catch (e) { setError(e); }
+    setBusy(false);
+  };
+  const changed = String(approvedExtraHours) !== String(row.approvedExtraHours || '0');
+  const sources = row.raw?.sourceRows || [];
+  const operators = row.operatorNames?.length ? row.operatorNames : [row.operatorName].filter(Boolean);
+  const tollCredits = (tollAdjustments || []).filter((adjustment) => adjustment.tollDirection !== 'DEDUCTION')
+    .reduce((total, adjustment) => total + Number(adjustment.amount || 0), 0);
+  const tollDeductions = (tollAdjustments || []).filter((adjustment) => adjustment.tollDirection === 'DEDUCTION')
+    .reduce((total, adjustment) => total + Number(adjustment.amount || 0), 0);
+  return (
+    <>
+      <tr>
+        <td><button className="btn btn-ghost btn-sm" onClick={() => setExpanded(!expanded)}>{expanded ? 'Hide' : 'Details'}</button></td>
+        <td className="nowrap">{date(row.week)}</td>
+        <td><div className="strong">{row.vehicleUnit ? `Vehicle ${row.vehicleUnit}` : row.calculationUnitLabel}</div><div className="muted small">{operators.join(', ')}{operators.length > 1 && <> <Badge tone="outline">Shared</Badge></>}</div></td>
+        <td className="num"><strong>{num(row.qualifyingSupplyHours)}</strong> / {num(row.contractedHours)} / {num(row.payableHours)}</td>
+        <td className="num"><div className="strong">{ratioPct(row.fulfillment)}</div>{row.qualified ? <Badge tone="ok">Qualified</Badge> : <Badge tone="warn">Fallback</Badge>}</td>
+        <td className="num">{ratioPct(row.acceptanceRate)}<div className="muted small">tier {ratioPct(row.acceptanceIncentivePct)}</div></td>
+        <td className="num">{ratioPct(row.cancellationRate)}<div className="muted small">tier {ratioPct(row.cancellationIncentivePct)}</div></td>
+        <td className="num">{ratioPct(row.utilizationRate)}<div className="muted small">tier {ratioPct(row.utilizationIncentivePct)}</div></td>
+        <td className="num">{ratioPct(row.coreHoursPct)}<div>{row.coreHoursPassed ? <Badge tone="ok">Pass</Badge> : <Badge tone="warn">Below target</Badge>}</div></td>
+        <td className="num">{money(row.grossVdp)}{tollCredits > 0 && <div className="plus small">+{money(tollCredits)} toll credit</div>}{tollDeductions > 0 && <div className="minus small">−{money(tollDeductions)} toll bill</div>}</td>
+      </tr>
+      {error && <tr><td colSpan={10}><ErrorAlert error={error} /></td></tr>}
+      {expanded && <tr><td colSpan={10}>
+        <div className="card-body grid grid-2">
+          <div>
+            <strong>Earnings components</strong>
+            <div className="kv" style={{ marginTop: 10 }}>
+              <div><div className="k">Base compensation</div><div className="v">{money(row.baseCompensation)}</div></div>
+              <div><div className="k">Core compensation</div><div className="v">{money(row.coreCompensation)}</div></div>
+              <div><div className="k">Contract-hours incentive</div><div className="v">{money(row.contractHoursIncentive)} · {ratioPct(row.hourIncentivePct)}</div></div>
+              <div><div className="k">Acceptance / cancellation</div><div className="v">{money(row.acceptanceCancellationIncentive)} · {ratioPct(row.acceptanceCancellationPct)}</div></div>
+              <div><div className="k">Utilization incentive</div><div className="v">{money(row.utilizationIncentive)} · {ratioPct(row.utilizationIncentivePct)}</div></div>
+              <div><div className="k">Tips</div><div className="v">{money(row.tips)}</div></div>
+              <div><div className="k">Earnings excl. tips (fallback)</div><div className="v">{money(row.driverEarningsExclTips)}</div></div>
+              <div><div className="k">Calculated pay</div><div className="v">{money(row.grossVdp)}</div></div>
+            </div>
+          </div>
+          <div>
+            <strong>Contract and calculation inputs</strong>
+            <div className="kv" style={{ marginTop: 10 }}>
+              <div><div className="k">Base hourly rate</div><div className="v">{rate(row.settingsUsed?.baseHourlyRate)} / hour</div></div>
+              <div><div className="k">Contracted hours</div><div className="v">{num(row.contractedHours)} / week</div></div>
+              <div><div className="k">Total supply / paused</div><div className="v">{num(row.totalSupplyHours)} / {num(row.pausedHours)} h</div></div>
+              <div><div className="k">Total offers</div><div className="v">{num(row.totalOffers)}</div></div>
+              <div><div className="k">Source</div><div className="v small">{row.sourceFileName || '-'}</div></div>
+              <div><div className="k">Rate source</div><div className="v"><span className="source-tag source-override">Provider profile</span></div></div>
+            </div>
+            {editable && <div className="actions" style={{ marginTop: 12 }}>
+              <Field label="Approved extra hours"><input aria-label={`Approved extra hours ${row.calculationUnitId} ${row.week}`} value={approvedExtraHours} onChange={(e) => setApprovedExtraHours(e.target.value)} style={{ width: 90 }} /></Field>
+              <button className="btn btn-sm btn-primary" disabled={busy || !changed} onClick={save}>{busy ? 'Saving...' : 'Save hours'}</button>
+            </div>}
+          </div>
+        </div>
+        <div className="card-body" style={{ paddingTop: 0 }}>
+          <strong>Source drivers</strong>
+          <div className="table-wrap" style={{ marginTop: 8 }}><table className="table-compact">
+            <thead><tr><th>Driver</th><th className="num">Contract allocation</th><th className="num">Supply</th><th className="num">Paused</th><th className="num">Qualifying</th><th className="num">Accept / reject / expired / cancel</th><th className="num">Earnings excl. tips</th><th className="num">Tips</th><th>Source</th></tr></thead>
+            <tbody>{sources.map((source) => <tr key={`${source.driverUuid}-${source.week}`}>
+              <td className="strong">{source.operatorName || 'Operator'}</td>
+              <td className="num">{num(source.contractedHours)} h</td><td className="num">{num(source.totalSupplyHours)}</td><td className="num">{num(source.pausedHours)}</td><td className="num">{num(Number(source.totalSupplyHours || 0) - Number(source.pausedHours || 0))}</td>
+              <td className="num">{num(source.totalAccepts)} / {num(source.totalRejects)} / {num(source.totalExpiredOffers)} / {num(source.totalCancels)}</td>
+              <td className="num">{money(source.driverEarningsExclTips)}</td><td className="num">{money(source.driverTips)}</td><td className="small">{source.sourceFileName || '-'}</td>
+            </tr>)}</tbody>
+          </table></div>
+          <div style={{ marginTop: 12 }}><strong>Calculation explanation</strong><ul className="small">{(row.explanation || []).map((line, i) => <li key={i}>{line}</li>)}</ul></div>
+        </div>
+      </td></tr>}
+    </>
+  );
+}
+
+function UberCalculationCard({ vdp, editable, onChanged }) {
+  const rows = vdp.view.calculation?.uberRows || [];
+  if (!rows.length) return null;
+  const calc = vdp.view.calculation;
+  const tolls = (vdp.view.adjustments || []).filter((adjustment) => adjustment.type === 'TOLL');
+  const tollsFor = (row) => {
+    const operatorIds = new Set((row.raw?.sourceRows || []).map((source) => String(source.operatorId || '')));
+    return tolls.filter((adjustment) => adjustment.week === row.week && operatorIds.has(String(adjustment.operatorId || '')));
+  };
+  return (
+    <Card title="Uber Gross VDP calculation" hint="Each vehicle/pay unit is evaluated by week at full precision. Operators sharing a vehicle are combined; source driver rows remain visible for audit." body={false}>
+      <div className="card-body kv">
+        <div><div className="k">Calculated Uber pay</div><div className="v">{money(calc.calculatedGross)}</div></div>
+        <div><div className="k">Toll credits</div><div className="v plus">+{money(calc.adjustmentTolls)}</div></div>
+        <div><div className="k">Toll deductions</div><div className="v minus">−{money(calc.adjustmentTollDeductions)}</div></div>
+        <div><div className="k">Total VDP Gross</div><div className="v">{money(calc.gross)}</div></div>
+        <div><div className="k">Net payment after deductions</div><div className="v">{money(calc.net)}</div></div>
+      </div>
+      <div className="table-wrap uber-results-table">
+        <table className="table-compact">
+          <thead><tr>
+            <th /><th>Week</th><th>Vehicle / pay unit and drivers</th><th className="num">Hours<br /><span className="muted small">qualifying / contract / payable</span></th>
+            <th className="num">Fulfillment</th><th className="num">Acceptance</th><th className="num">Cancellation</th><th className="num">Utilization</th><th className="num">Core hours</th><th className="num">Calculated pay</th>
+          </tr></thead>
+          <tbody>{rows.map((row) => <UberCalculationRow key={`${row.calculationUnitId}-${row.week}`} row={row} tollAdjustments={tollsFor(row)} vdpId={vdp._id} editable={editable} onChanged={onChanged} />)}</tbody>
+          <tfoot><tr><td colSpan={9}>Total VDP Gross (including toll credits; toll bills are deducted below)</td><td className="num" style={{ fontSize: 16 }}>{money(calc.gross)}</td></tr></tfoot>
+        </table>
+      </div>
+    </Card>
   );
 }
 
@@ -203,16 +327,27 @@ export function FuelCard({ vdp, editable, onChanged }) {
 }
 
 function AdjustmentsCard({ vdp, types, editable, onChanged }) {
-  const [form, setForm] = useState({ type: 'FARES', amount: '', description: '', date: todayLocal() });
+  const [form, setForm] = useState({ type: 'FARES', amount: '', description: '', date: todayLocal(), operatorId: '', week: '', tollDirection: 'CREDIT' });
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(null);
   const [lease, setLease] = useState(null);
   const view = vdp.view;
-  const typeInfo = (k) => types.find((t) => t.key === k) || { label: k, direction: 'DEDUCTION' };
   // On a service mile allowance plan fuel is deducted from the actual expense, never entered here.
   const allowance = view.settings?.fuelMethod?.value === 'SERVICE_MILE_ALLOWANCE';
-  const choices = types.filter((t) => !(allowance && t.key === 'FUEL'));
+  const uber = view.settings?.calculationType?.value === 'UBER';
+  const typeInfo = (k, tollDirection = 'CREDIT') => {
+    const found = types.find((t) => t.key === k) || { label: k, direction: 'DEDUCTION' };
+    return uber && k === 'TOLL'
+      ? { ...found, label: tollDirection === 'DEDUCTION' ? 'Toll bill' : 'Toll credit', direction: tollDirection === 'DEDUCTION' ? 'DEDUCTION' : 'ADDITION' }
+      : found;
+  };
+  const choices = types.filter((t) => !(allowance && t.key === 'FUEL') && !(uber && t.key === 'TOLL')).map((t) => typeInfo(t.key));
+  const uberToll = uber && form.type === 'TOLL';
+  const uberRows = view.calculation?.uberRows || [];
+  const availableOperatorIds = new Set(uberRows.flatMap((row) => row.raw?.sourceRows || []).map((row) => String(row.operatorId || '')).filter(Boolean));
+  const tollOperators = (view.provider?.operators || []).filter((operator) => availableOperatorIds.has(String(operator.id)));
+  const tollWeeks = [...new Set(uberRows.map((row) => row.week))].sort();
   const add = async (e) => {
     e.preventDefault();
     setBusy(true);
@@ -226,7 +361,7 @@ function AdjustmentsCard({ vdp, types, editable, onChanged }) {
   const leaseAmt = view.calculation?.lease;
   const l = view.lease || {};
   return (
-    <Card title="Adjustments" hint="Lift lease is automatic. Enter fares collected and anything else automation cannot know." body={false}>
+    <Card title="Adjustments" hint={uber ? 'Enter each toll as either a provider credit or a provider deduction, then assign it to a driver and week. Lift lease is automatic per distinct vehicle.' : 'Lift lease is automatic. Enter fares collected and anything else automation cannot know.'} body={false}>
       <div className="table-wrap">
         <table>
           <thead><tr><th>Item</th><th>Description</th><th>Entered</th><th className="num">Amount</th><th /></tr></thead>
@@ -235,7 +370,7 @@ function AdjustmentsCard({ vdp, types, editable, onChanged }) {
               <td className="strong">Lift lease <Badge tone="outline">Automatic</Badge></td>
               <td className="small">
                 {l.operators?.length > 1
-                  ? l.operators.map((o) => <div key={o.name}>{o.name}: {o.frequency === 'NONE' || !o.amount ? 'no lease' : `${money(o.amount)} / ${LEASE_LABELS[o.frequency]}`}{o.weeksCharged && !l.weeksCharged && ` · ${num(o.weeksCharged)} week(s)`}</div>)
+                  ? l.operators.map((o) => <div key={o.id || o.name}>{o.name}{o.operatorNames?.length > 1 ? ` (${o.operatorNames.join(', ')})` : ''}: {o.frequency === 'NONE' || !o.amount ? 'no lease' : `${money(o.amount)} / ${LEASE_LABELS[o.frequency]}`}{o.weeksCharged && !l.weeksCharged && ` · ${num(o.weeksCharged)} week(s)`}</div>)
                   : l.frequency === 'NONE' || !l.amount ? 'No lift lease on profile' : `${money(l.amount)} / ${LEASE_LABELS[l.frequency]}`}
                 {l.weeksCharged && ` · ${num(l.weeksCharged)} week(s) charged`}
                 {l.note && <div className="muted">{l.note}</div>}
@@ -258,12 +393,12 @@ function AdjustmentsCard({ vdp, types, editable, onChanged }) {
               </tr>
             )}
             {view.adjustments.map((a) => {
-              const t = typeInfo(a.type);
+              const t = typeInfo(a.type, a.tollDirection || 'CREDIT');
               const add = t.direction === 'ADDITION';
               return (
                 <tr key={a._id || a.createdAt}>
                   <td className="strong">{t.label}</td>
-                  <td className="small">{a.description || '—'}</td>
+                  <td className="small">{a.operatorName && <div className="strong">{a.operatorName}{a.week ? ` · week of ${date(a.week)}` : ''}</div>}{a.description || '—'}</td>
                   <td className="small muted">{date(a.date)} · {a.createdBy?.name}</td>
                   <td className={`num ${add ? 'plus' : 'minus'}`}>{add ? '+' : '−'}{money(a.amount)}</td>
                   <td className="num">{editable && <button className="btn btn-ghost btn-sm no-print" onClick={() => setRemoving(a)}>Remove</button>}</td>
@@ -278,22 +413,41 @@ function AdjustmentsCard({ vdp, types, editable, onChanged }) {
         <form className="card-body no-print" onSubmit={add} style={{ borderTop: '1px solid var(--border)' }}>
           <div className="filters">
             <Field label="Type" htmlFor="a-type">
-              <select id="a-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+              <select id="a-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, operatorId: '', week: '', tollDirection: 'CREDIT' })}>
+                {uber && <option value="TOLL">Tolls (credit or deduction)</option>}
                 <optgroup label="Deductions">{choices.filter((t) => t.direction === 'DEDUCTION').map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</optgroup>
                 <optgroup label="Additions">{choices.filter((t) => t.direction === 'ADDITION').map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}</optgroup>
               </select>
             </Field>
+            {uberToll && <Field label="Treatment" htmlFor="a-toll-direction">
+              <select id="a-toll-direction" value={form.tollDirection} onChange={(e) => setForm({ ...form, tollDirection: e.target.value })} required>
+                <option value="CREDIT">Provider credit (add to Gross)</option>
+                <option value="DEDUCTION">Provider deduction (bill)</option>
+              </select>
+            </Field>}
+            {uberToll && <Field label="Driver / operator" htmlFor="a-operator">
+              <select id="a-operator" value={form.operatorId} onChange={(e) => setForm({ ...form, operatorId: e.target.value })} required>
+                <option value="">Choose driver</option>
+                {tollOperators.map((operator) => <option key={operator.id} value={operator.id}>{operator.name}{operator.vehicleUnit ? ` · vehicle ${operator.vehicleUnit}` : ''}</option>)}
+              </select>
+            </Field>}
+            {uberToll && <Field label="Uber week" htmlFor="a-week">
+              <select id="a-week" value={form.week} onChange={(e) => setForm({ ...form, week: e.target.value })} required>
+                <option value="">Choose week</option>
+                {tollWeeks.map((week) => <option key={week} value={week}>Week of {date(week)}</option>)}
+              </select>
+            </Field>}
             <Field label="Amount ($)" htmlFor="a-amt"><input id="a-amt" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="25.20" style={{ width: 110 }} /></Field>
             <Field label="Description" htmlFor="a-desc"><input id="a-desc" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="e.g. 9 cash fares" /></Field>
             <Field label="Date" htmlFor="a-date"><input id="a-date" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field>
-            <button className="btn btn-primary" type="submit" disabled={busy || !form.amount}>Add</button>
+            <button className="btn btn-primary" type="submit" disabled={busy || !form.amount || (uberToll && (!form.operatorId || !form.week))}>Add</button>
           </div>
-          <p className="muted small" style={{ marginTop: 6 }}>Enter a positive amount — the type decides whether it is deducted or added.</p>
+          <p className="muted small" style={{ marginTop: 6 }}>{uberToll ? 'Enter a positive amount and choose whether it credits or bills the provider.' : 'Enter a positive amount — the type decides whether it is deducted or added.'}</p>
           {error && <div style={{ marginTop: 8 }}><ErrorAlert error={error} /></div>}
         </form>
       )}
       {removing && (
-        <Confirm title="Remove adjustment?" message={`${typeInfo(removing.type).label} of ${money(removing.amount)} will be removed and the VDP recalculated.`}
+        <Confirm title="Remove adjustment?" message={`${typeInfo(removing.type, removing.tollDirection || 'CREDIT').label} of ${money(removing.amount)} will be removed and the VDP recalculated.`}
           confirmLabel="Remove" tone="danger" onClose={() => setRemoving(null)}
           onConfirm={async () => onChanged(await api.del(`/vdps/${vdp._id}/adjustments/${removing._id}`))} />
       )}
@@ -403,6 +557,7 @@ export default function VdpReview() {
   const v = vdp.view;
   const editable = EDITABLE.includes(vdp.status);
   const perTrip = v.settings?.paymentType?.value === 'PER_TRIP';
+  const uber = v.settings?.calculationType?.value === 'UBER';
   const act = async (fn, msg) => {
     setActionError(null);
     try { setData(await fn()); if (msg) toast(msg); } catch (e) { setActionError(e); reload(); }
@@ -475,10 +630,12 @@ export default function VdpReview() {
         <div className="split">
           <div className="stack">
             {!v.calculation && !v.performance && <Card><Empty title="Not calculated">Resolve the issues above, then recalculate.</Empty></Card>}
-            <PerformanceCard view={v} />
-            <OperatorsCard calc={v.calculation} perTrip={perTrip} settings={v.settings} />
-            <EarningsCard calc={v.calculation} perTrip={perTrip} />
-            <FuelCard key={`${vdp._id}-${vdp.view.fuelExpense?.amount ?? ''}`} vdp={vdp} editable={editable} onChanged={(d) => { setData(d); toast('Fuel expense saved'); }} />
+            {uber ? <UberCalculationCard vdp={vdp} editable={editable} onChanged={(d) => { setData(d); toast('Uber weekly adjustment saved'); }} /> : <>
+              <PerformanceCard view={v} />
+              <OperatorsCard calc={v.calculation} perTrip={perTrip} settings={v.settings} />
+              <EarningsCard calc={v.calculation} perTrip={perTrip} />
+              <FuelCard key={`${vdp._id}-${vdp.view.fuelExpense?.amount ?? ''}`} vdp={vdp} editable={editable} onChanged={(d) => { setData(d); toast('Fuel expense saved'); }} />
+            </>}
             <AdjustmentsCard vdp={vdp} types={types.data || []} editable={editable} onChanged={(d) => { setData(d); toast('VDP updated'); }} />
             <ExplainCalculation calc={v.calculation} settings={v.settings} />
           </div>

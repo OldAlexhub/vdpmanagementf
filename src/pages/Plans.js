@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../App';
-import { date, isoDate, rate, num, METRIC_LABELS, PAYMENT_TYPE_LABELS } from '../format';
+import { date, isoDate, rate, num, pct, METRIC_LABELS, PAYMENT_TYPE_LABELS } from '../format';
 import { ActiveBadge, Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
 import BulkImport from '../components/BulkImport';
 
@@ -14,6 +14,16 @@ const DEFAULT_TIERS = [
   { minimumPercentage: '95', maximumPercentage: '99.99', rate: '' },
   { minimumPercentage: '100', maximumPercentage: '', rate: '' },
 ];
+
+const DEFAULT_UBER_CONFIG = {
+  coreRatePct: '0.65', approvedExtraHours: '0',
+  contractHoursIncentiveTiers: [
+    { minimum: '0.94', rate: '0.05' }, { minimum: '0.96', rate: '0.10' }, { minimum: '0.98', rate: '0.20' },
+  ],
+  acceptanceIncentiveTiers: [{ minimum: '0.92', rate: '0.05' }, { minimum: '0.95', rate: '0.10' }],
+  cancellationIncentiveTiers: [{ maximum: '0.04', rate: '0.10' }, { maximum: '0.05', rate: '0.05' }],
+  utilizationTarget: '0.70', utilizationIncentivePct: '0.05', coreHoursRequirement: '0.60',
+};
 
 export function TierTable({ tiers, compact }) {
   if (!tiers?.length) return <p className="muted">No incentive tiers.</p>;
@@ -123,6 +133,7 @@ function FuelPricesModal({ plan, onClose, onSaved }) {
 }
 
 const versionForm = (v) => ({
+  calculationType: v?.calculationType || 'STANDARD',
   paymentType: v?.paymentType || 'HOURLY',
   basePay: v?.basePay || '',
   contractedHours: v?.contractedHours || '',
@@ -136,35 +147,98 @@ const versionForm = (v) => ({
   fuelMileageSource: v?.fuelMileageSource || 'SERVICE_MILES',
   performanceHourMetric: v?.performanceHourMetric || 'TOTAL_HOURS',
   performanceHourColumn: v?.performanceHourColumn || '',
+  uberConfig: v?.uberConfig ? {
+    ...DEFAULT_UBER_CONFIG,
+    ...v.uberConfig,
+    contractHoursIncentiveTiers: (v.uberConfig.contractHoursIncentiveTiers || []).map((t) => ({ ...t })),
+    acceptanceIncentiveTiers: (v.uberConfig.acceptanceIncentiveTiers || []).map((t) => ({ ...t })),
+    cancellationIncentiveTiers: (v.uberConfig.cancellationIncentiveTiers || []).map((t) => ({ ...t })),
+  } : { ...DEFAULT_UBER_CONFIG,
+    contractHoursIncentiveTiers: DEFAULT_UBER_CONFIG.contractHoursIncentiveTiers.map((t) => ({ ...t })),
+    acceptanceIncentiveTiers: DEFAULT_UBER_CONFIG.acceptanceIncentiveTiers.map((t) => ({ ...t })),
+    cancellationIncentiveTiers: DEFAULT_UBER_CONFIG.cancellationIncentiveTiers.map((t) => ({ ...t })),
+  },
   effectiveFrom: isoDate(v?.effectiveFrom) || '',
   effectiveTo: isoDate(v?.effectiveTo) || '',
   notes: v?.notes || '',
 });
 
+function UberTierEditor({ title, tiers, thresholdKey, thresholdLabel, onChange }) {
+  const update = (i, key, value) => onChange(tiers.map((tier, index) => (index === i ? { ...tier, [key]: value } : tier)));
+  return (
+    <div>
+      <h4 style={{ margin: '8px 0 6px' }}>{title}</h4>
+      <table className="table-compact">
+        <thead><tr><th>{thresholdLabel}</th><th>Incentive rate</th><th /></tr></thead>
+        <tbody>
+          {tiers.map((tier, i) => (
+            <tr key={i}>
+              <td><input aria-label={`${title} tier ${i + 1} threshold`} value={tier[thresholdKey]} onChange={(e) => update(i, thresholdKey, e.target.value)} placeholder="0.95" /></td>
+              <td><input aria-label={`${title} tier ${i + 1} rate`} value={tier.rate} onChange={(e) => update(i, 'rate', e.target.value)} placeholder="0.10" /></td>
+              <td className="num"><button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(tiers.filter((_, index) => index !== i))}>Remove</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button type="button" className="btn btn-sm" style={{ marginTop: 6 }} onClick={() => onChange([...tiers, { [thresholdKey]: '', rate: '' }])}>Add tier</button>
+    </div>
+  );
+}
+
+function UberConfigFields({ value, onChange }) {
+  const set = (key) => (e) => onChange({ ...value, [key]: e.target.value });
+  const tiers = (key) => (next) => onChange({ ...value, [key]: next });
+  return (
+    <div className="card card-body">
+      <h3 style={{ margin: '0 0 4px' }}>Uber compensation configuration</h3>
+      <p className="muted small" style={{ margin: '0 0 10px' }}>Enter percentages as ratios: 0.65 = 65%. Every value is frozen with the plan version used by the VDP.</p>
+      <div className="form-grid">
+        <Field label="Core rate percentage" htmlFor="uber-core"><input id="uber-core" value={value.coreRatePct} onChange={set('coreRatePct')} placeholder="0.65" /></Field>
+        <Field label="Approved extra hours default" htmlFor="uber-extra" help="Can be overridden for an individual driver/week during VDP review."><input id="uber-extra" value={value.approvedExtraHours} onChange={set('approvedExtraHours')} placeholder="0" /></Field>
+        <Field label="Utilization target" htmlFor="uber-util-target"><input id="uber-util-target" value={value.utilizationTarget} onChange={set('utilizationTarget')} placeholder="0.70" /></Field>
+        <Field label="Utilization incentive percentage" htmlFor="uber-util-rate"><input id="uber-util-rate" value={value.utilizationIncentivePct} onChange={set('utilizationIncentivePct')} placeholder="0.05" /></Field>
+        <Field label="Core hours requirement" htmlFor="uber-core-hours" help="Calculated and flagged only; it does not change Gross VDP."><input id="uber-core-hours" value={value.coreHoursRequirement} onChange={set('coreHoursRequirement')} placeholder="0.60" /></Field>
+      </div>
+      <div className="grid grid-3" style={{ alignItems: 'start', marginTop: 10 }}>
+        <UberTierEditor title="Contract-hours tiers" tiers={value.contractHoursIncentiveTiers} thresholdKey="minimum" thresholdLabel="Minimum fulfillment" onChange={tiers('contractHoursIncentiveTiers')} />
+        <UberTierEditor title="Acceptance tiers" tiers={value.acceptanceIncentiveTiers} thresholdKey="minimum" thresholdLabel="Minimum acceptance" onChange={tiers('acceptanceIncentiveTiers')} />
+        <UberTierEditor title="Cancellation tiers" tiers={value.cancellationIncentiveTiers} thresholdKey="maximum" thresholdLabel="Maximum cancellation" onChange={tiers('cancellationIncentiveTiers')} />
+      </div>
+    </div>
+  );
+}
+
 function VersionFields({ form, setForm, showDates = true }) {
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
   const hourly = form.paymentType === 'HOURLY';
+  const uber = form.calculationType === 'UBER';
   return (
     <div className="stack">
       <div className="form-grid">
-        <Field label="Payment type" htmlFor="v-type">
+        <Field label="Plan / service type" htmlFor="v-calc-type" help="Selects the backend calculation engine and source-data workflow.">
+          <select id="v-calc-type" value={form.calculationType} onChange={(e) => setForm({ ...form, calculationType: e.target.value, ...(e.target.value === 'UBER' ? { paymentType: 'HOURLY', basePay: '', contractedHours: '', incentiveEnabled: false, bonusEnabled: false, fuelMethod: 'NONE' } : {}) })}>
+            <option value="STANDARD">Standard hourly or per-trip</option>
+            <option value="UBER">Uber</option>
+          </select>
+        </Field>
+        {!uber && <Field label="Payment type" htmlFor="v-type">
           <select id="v-type" value={form.paymentType} onChange={(e) => setForm({ ...form, paymentType: e.target.value, bonusEnabled: e.target.value === 'HOURLY' && form.bonusEnabled })}>
             <option value="HOURLY">Hourly — paid on hours performed</option>
             <option value="PER_TRIP">Per trip — paid on trips provided</option>
           </select>
-        </Field>
-        <Field label={hourly ? 'Base pay ($/hour)' : 'Base pay ($/trip)'} htmlFor="v-base" help="Paid when TUI does not apply.">
+        </Field>}
+        {!uber && <Field label={hourly ? 'Base pay ($/hour)' : 'Base pay ($/trip)'} htmlFor="v-base" help="Paid when TUI does not apply.">
           <input id="v-base" value={form.basePay} onChange={set('basePay')} placeholder={hourly ? '25.97' : '21.50'} />
-        </Field>
-        <Field label="Contracted hours per week" htmlFor="v-hours" help={hourly ? 'Required for hourly plans.' : 'Optional for per-trip plans (needed only for TUI).'}>
+        </Field>}
+        {!uber && <Field label="Contracted hours per week" htmlFor="v-hours" help={hourly ? 'Required for hourly plans.' : 'Optional for per-trip plans (needed only for TUI).'}>
           <input id="v-hours" value={form.contractedHours} onChange={set('contractedHours')} placeholder="40" />
-        </Field>
-        <Field label="Performance hours come from" htmlFor="v-metric" help="Which Performance Report column counts as hours worked.">
+        </Field>}
+        {!uber && <Field label="Performance hours come from" htmlFor="v-metric" help="Which Performance Report column counts as hours worked.">
           <select id="v-metric" value={form.performanceHourMetric} onChange={set('performanceHourMetric')}>
             {Object.entries(METRIC_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
-        </Field>
-        {form.performanceHourMetric === 'OTHER' && (
+        </Field>}
+        {!uber && form.performanceHourMetric === 'OTHER' && (
           <Field label="Report column name (Hours section)" htmlFor="v-col" full>
             <input id="v-col" value={form.performanceHourColumn} onChange={set('performanceHourColumn')} placeholder="e.g. Slk Time (mins)" />
           </Field>
@@ -177,6 +251,7 @@ function VersionFields({ form, setForm, showDates = true }) {
         )}
       </div>
 
+      {uber ? <UberConfigFields value={form.uberConfig} onChange={(uberConfig) => setForm({ ...form, uberConfig })} /> : <>
       <div className="card card-body">
         <label className="check"><input type="checkbox" checked={form.incentiveEnabled} onChange={set('incentiveEnabled')} /> TUI (Top-Up Incentive) eligible</label>
         <p className="muted small" style={{ margin: '4px 0 10px 24px' }}>
@@ -240,6 +315,7 @@ function VersionFields({ form, setForm, showDates = true }) {
           </div>
         )}
       </div>
+      </>}
       <Field label="Notes" htmlFor="v-notes"><textarea id="v-notes" value={form.notes} onChange={set('notes')} /></Field>
     </div>
   );
@@ -302,6 +378,7 @@ function VersionModal({ plan, version, mode, onClose, onSaved }) {
 
 export function planSummary(v) {
   if (!v) return 'No version';
+  if (v.calculationType === 'UBER') return `Operator-profile rate and hours | ${v.uberConfig?.contractHoursIncentiveTiers?.length || 0} fulfillment tiers`;
   const unit = v.paymentType === 'HOURLY' ? '/hr' : '/trip';
   const parts = [`${rate(v.basePay)}${unit} base`];
   if (v.contractedHours) parts.push(`${num(v.contractedHours)} h/week`);
@@ -351,7 +428,7 @@ export function PlanList() {
                       <tr key={p._id} className="clickable" onClick={() => navigate(`/plans/${p._id}`)}>
                         <td className="strong">{p.name}</td>
                         <td>{divName(p.divisionId)}</td>
-                        <td>{PAYMENT_TYPE_LABELS[cur?.paymentType]}</td>
+                        <td>{cur?.calculationType === 'UBER' ? 'Uber' : PAYMENT_TYPE_LABELS[cur?.paymentType]}</td>
                         <td className="small">{planSummary(cur)}</td>
                         <td className="num">{p.providerCount}</td>
                         <td>{p.versions.length}</td>
@@ -407,14 +484,28 @@ export function PlanDetail() {
               hint={`Effective ${date(v.effectiveFrom)} – ${v.effectiveTo ? date(v.effectiveTo) : 'open'}`}
               actions={isAdmin && !v.locked && <button className="btn btn-sm" onClick={() => setModal({ mode: 'edit', version: v })}>Edit</button>}>
               <div className="kv" style={{ marginBottom: 14 }}>
-                <div><div className="k">Payment type</div><div className="v">{PAYMENT_TYPE_LABELS[v.paymentType]}</div></div>
-                <div><div className="k">Base pay</div><div className="v">{rate(v.basePay)}{v.paymentType === 'HOURLY' ? '/hour' : '/trip'}</div></div>
-                <div><div className="k">Contracted hours</div><div className="v">{v.contractedHours ? `${num(v.contractedHours)} / week` : '—'}</div></div>
-                <div><div className="k">Performance hours</div><div className="v">{METRIC_LABELS[v.performanceHourMetric]}{v.performanceHourColumn ? ` (${v.performanceHourColumn})` : ''}</div></div>
-                <div><div className="k">TUI eligible</div><div className="v">{v.incentiveEnabled ? <Badge tone="ok">On</Badge> : <Badge>Off</Badge>}</div></div>
-                <div><div className="k">Bonus rate</div><div className="v">{v.bonusEnabled ? `${rate(v.bonusRate)}/hour above contract` : 'None'}</div></div>
-                <div><div className="k">Fuel</div><div className="v">{fuelSummary(v)}</div></div>
+                <div><div className="k">Plan / service type</div><div className="v">{v.calculationType === 'UBER' ? 'Uber' : PAYMENT_TYPE_LABELS[v.paymentType]}</div></div>
+                <div><div className="k">{v.calculationType === 'UBER' ? 'Base hourly rate' : 'Base pay'}</div><div className="v">{v.calculationType === 'UBER' ? 'Operator profile' : <>{rate(v.basePay)}{v.paymentType === 'HOURLY' ? '/hour' : '/trip'}</>}</div></div>
+                <div><div className="k">Contracted hours</div><div className="v">{v.calculationType === 'UBER' ? 'Operator profile' : v.contractedHours ? `${num(v.contractedHours)} / week` : '—'}</div></div>
+                {v.calculationType !== 'UBER' && <div><div className="k">Performance hours</div><div className="v">{METRIC_LABELS[v.performanceHourMetric]}{v.performanceHourColumn ? ` (${v.performanceHourColumn})` : ''}</div></div>}
+                {v.calculationType !== 'UBER' && <div><div className="k">TUI eligible</div><div className="v">{v.incentiveEnabled ? <Badge tone="ok">On</Badge> : <Badge>Off</Badge>}</div></div>}
+                {v.calculationType !== 'UBER' && <div><div className="k">Bonus rate</div><div className="v">{v.bonusEnabled ? `${rate(v.bonusRate)}/hour above contract` : 'None'}</div></div>}
+                {v.calculationType !== 'UBER' && <div><div className="k">Fuel</div><div className="v">{fuelSummary(v)}</div></div>}
               </div>
+              {v.calculationType === 'UBER' && v.uberConfig && (
+                <div style={{ marginBottom: 14 }}>
+                  <h3 style={{ margin: '4px 0 8px' }}>Uber compensation rules</h3>
+                  <div className="kv">
+                    <div><div className="k">Core rate</div><div className="v">{pct(Number(v.uberConfig.coreRatePct) * 100)}</div></div>
+                    <div><div className="k">Approved extra hours default</div><div className="v">{num(v.uberConfig.approvedExtraHours)}</div></div>
+                    <div><div className="k">Utilization target / incentive</div><div className="v">{pct(Number(v.uberConfig.utilizationTarget) * 100)} / {pct(Number(v.uberConfig.utilizationIncentivePct) * 100)}</div></div>
+                    <div><div className="k">Core hours requirement</div><div className="v">{pct(Number(v.uberConfig.coreHoursRequirement) * 100)} (visibility only)</div></div>
+                    <div><div className="k">Contract-hours tiers</div><div className="v small">{v.uberConfig.contractHoursIncentiveTiers.map((t) => `${pct(Number(t.minimum) * 100)}+: ${pct(Number(t.rate) * 100)}`).join(' | ')}</div></div>
+                    <div><div className="k">Acceptance tiers</div><div className="v small">{v.uberConfig.acceptanceIncentiveTiers.map((t) => `${pct(Number(t.minimum) * 100)}+: ${pct(Number(t.rate) * 100)}`).join(' | ')}</div></div>
+                    <div><div className="k">Cancellation tiers</div><div className="v small">{v.uberConfig.cancellationIncentiveTiers.map((t) => `up to ${pct(Number(t.maximum) * 100)}: ${pct(Number(t.rate) * 100)}`).join(' | ')}</div></div>
+                  </div>
+                </div>
+              )}
               {fuelMethodOf(v) === 'SERVICE_MILE_ALLOWANCE' && v._id === plan.currentVersionId && (
                 <div style={{ marginBottom: 14 }}>
                   <div className="actions" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
