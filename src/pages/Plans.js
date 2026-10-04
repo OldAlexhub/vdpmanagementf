@@ -17,12 +17,15 @@ const DEFAULT_TIERS = [
 
 const DEFAULT_UBER_CONFIG = {
   coreRatePct: '0.65', approvedExtraHours: '0',
+  minimumFulfillmentForIncentives: '0.94', belowThresholdBehavior: 'FARES_ONLY',
+  rateStructureType: 'FLAT', hourlyRateBands: [],
   contractHoursIncentiveTiers: [
     { minimum: '0.94', rate: '0.05' }, { minimum: '0.96', rate: '0.10' }, { minimum: '0.98', rate: '0.20' },
   ],
   acceptanceIncentiveTiers: [{ minimum: '0.92', rate: '0.05' }, { minimum: '0.95', rate: '0.10' }],
   cancellationIncentiveTiers: [{ maximum: '0.04', rate: '0.10' }, { maximum: '0.05', rate: '0.05' }],
-  utilizationTarget: '0.70', utilizationIncentivePct: '0.05', coreHoursRequirement: '0.60',
+  utilizationEnabled: true, utilizationTarget: '0.70', utilizationIncentivePct: '0.05',
+  coreHoursRuleType: 'PERCENTAGE', coreHoursRequirement: '0.60',
 };
 
 export function TierTable({ tiers, compact }) {
@@ -153,10 +156,18 @@ const versionForm = (v) => ({
     contractHoursIncentiveTiers: (v.uberConfig.contractHoursIncentiveTiers || []).map((t) => ({ ...t })),
     acceptanceIncentiveTiers: (v.uberConfig.acceptanceIncentiveTiers || []).map((t) => ({ ...t })),
     cancellationIncentiveTiers: (v.uberConfig.cancellationIncentiveTiers || []).map((t) => ({ ...t })),
+    minimumFulfillmentForIncentives: v.uberConfig.minimumFulfillmentForIncentives
+      || v.uberConfig.contractHoursIncentiveTiers?.[0]?.minimum || '0.94',
+    belowThresholdBehavior: v.uberConfig.belowThresholdBehavior || 'FARES_ONLY',
+    rateStructureType: v.uberConfig.rateStructureType || 'FLAT',
+    hourlyRateBands: (v.uberConfig.hourlyRateBands || []).map((band) => ({ ...band })),
+    utilizationEnabled: v.uberConfig.utilizationEnabled ?? true,
+    coreHoursRuleType: v.uberConfig.coreHoursRuleType || 'PERCENTAGE',
   } : { ...DEFAULT_UBER_CONFIG,
     contractHoursIncentiveTiers: DEFAULT_UBER_CONFIG.contractHoursIncentiveTiers.map((t) => ({ ...t })),
     acceptanceIncentiveTiers: DEFAULT_UBER_CONFIG.acceptanceIncentiveTiers.map((t) => ({ ...t })),
     cancellationIncentiveTiers: DEFAULT_UBER_CONFIG.cancellationIncentiveTiers.map((t) => ({ ...t })),
+    hourlyRateBands: [],
   },
   effectiveFrom: isoDate(v?.effectiveFrom) || '',
   effectiveTo: isoDate(v?.effectiveTo) || '',
@@ -187,7 +198,12 @@ function UberTierEditor({ title, tiers, thresholdKey, thresholdLabel, onChange }
 
 function UberConfigFields({ value, onChange }) {
   const set = (key) => (e) => onChange({ ...value, [key]: e.target.value });
+  const toggle = (key) => (e) => onChange({ ...value, [key]: e.target.checked });
   const tiers = (key) => (next) => onChange({ ...value, [key]: next });
+  const updateBand = (index, key, nextValue) => onChange({
+    ...value,
+    hourlyRateBands: value.hourlyRateBands.map((band, i) => (i === index ? { ...band, [key]: nextValue } : band)),
+  });
   return (
     <div className="card card-body">
       <h3 style={{ margin: '0 0 4px' }}>Uber compensation configuration</h3>
@@ -195,10 +211,54 @@ function UberConfigFields({ value, onChange }) {
       <div className="form-grid">
         <Field label="Core rate percentage" htmlFor="uber-core"><input id="uber-core" value={value.coreRatePct} onChange={set('coreRatePct')} placeholder="0.65" /></Field>
         <Field label="Approved extra hours default" htmlFor="uber-extra" help="Can be overridden for an individual driver/week during VDP review."><input id="uber-extra" value={value.approvedExtraHours} onChange={set('approvedExtraHours')} placeholder="0" /></Field>
-        <Field label="Utilization target" htmlFor="uber-util-target"><input id="uber-util-target" value={value.utilizationTarget} onChange={set('utilizationTarget')} placeholder="0.70" /></Field>
-        <Field label="Utilization incentive percentage" htmlFor="uber-util-rate"><input id="uber-util-rate" value={value.utilizationIncentivePct} onChange={set('utilizationIncentivePct')} placeholder="0.05" /></Field>
-        <Field label="Core hours requirement" htmlFor="uber-core-hours" help="Calculated and flagged only; it does not change Gross VDP."><input id="uber-core-hours" value={value.coreHoursRequirement} onChange={set('coreHoursRequirement')} placeholder="0.60" /></Field>
+        <Field label="Minimum fulfillment required for incentives" htmlFor="uber-min-fulfillment"><input id="uber-min-fulfillment" value={value.minimumFulfillmentForIncentives} onChange={set('minimumFulfillmentForIncentives')} placeholder="0.94" /></Field>
+        <Field label="Below-threshold behavior" htmlFor="uber-below-threshold">
+          <select id="uber-below-threshold" value={value.belowThresholdBehavior} onChange={set('belowThresholdBehavior')}>
+            <option value="FARES_ONLY">Fares only</option>
+            <option value="CORE_ONLY">Core only</option>
+          </select>
+        </Field>
+        <Field label="Rate structure" htmlFor="uber-rate-structure">
+          <select id="uber-rate-structure" value={value.rateStructureType} onChange={set('rateStructureType')}>
+            <option value="FLAT">Flat hourly rate</option>
+            <option value="HOURLY_BANDS">Hourly bands</option>
+          </select>
+        </Field>
+        <Field label="Core hours rule" htmlFor="uber-core-rule">
+          <select id="uber-core-rule" value={value.coreHoursRuleType} onChange={set('coreHoursRuleType')}>
+            <option value="PERCENTAGE">Percentage of contracted hours</option>
+            <option value="CONTINUOUS_COVERAGE">Continuous coverage</option>
+            <option value="NONE">None</option>
+          </select>
+        </Field>
+        {value.coreHoursRuleType === 'PERCENTAGE' && <Field label="Core hours requirement" htmlFor="uber-core-hours" help="Calculated and flagged only; it does not change Gross VDP."><input id="uber-core-hours" value={value.coreHoursRequirement} onChange={set('coreHoursRequirement')} placeholder="0.60" /></Field>}
       </div>
+      {value.rateStructureType === 'HOURLY_BANDS' && (
+        <div style={{ marginTop: 10 }}>
+          <h4 style={{ margin: '8px 0 6px' }}>Hourly rate bands</h4>
+          <table className="table-compact">
+            <thead><tr><th>From hour</th><th>To hour</th><th>Rate</th><th /></tr></thead>
+            <tbody>{value.hourlyRateBands.map((band, index) => (
+              <tr key={index}>
+                <td><input aria-label={`Rate band ${index + 1} from hour`} value={band.fromHour} onChange={(e) => updateBand(index, 'fromHour', e.target.value)} /></td>
+                <td><input aria-label={`Rate band ${index + 1} to hour`} value={band.toHour} onChange={(e) => updateBand(index, 'toHour', e.target.value)} /></td>
+                <td><input aria-label={`Rate band ${index + 1} rate`} value={band.hourlyRate} onChange={(e) => updateBand(index, 'hourlyRate', e.target.value)} /></td>
+                <td className="num"><button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange({ ...value, hourlyRateBands: value.hourlyRateBands.filter((_, i) => i !== index) })}>Remove</button></td>
+              </tr>
+            ))}</tbody>
+          </table>
+          <button type="button" className="btn btn-sm" style={{ marginTop: 6 }} onClick={() => onChange({ ...value, hourlyRateBands: [...value.hourlyRateBands, { fromHour: '', toHour: '', hourlyRate: '' }] })}>Add band</button>
+          <p className="help muted small">Bands must start at 0 and be contiguous. Each payable hour is priced by the band it falls into.</p>
+        </div>
+      )}
+      <div className="card card-body" style={{ marginTop: 10 }}>
+        <label className="check"><input type="checkbox" checked={value.utilizationEnabled} onChange={toggle('utilizationEnabled')} /> Enable utilization incentive</label>
+        {value.utilizationEnabled && <div className="form-grid" style={{ marginTop: 10 }}>
+          <Field label="Utilization target" htmlFor="uber-util-target"><input id="uber-util-target" value={value.utilizationTarget} onChange={set('utilizationTarget')} placeholder="0.70" /></Field>
+          <Field label="Utilization incentive percentage" htmlFor="uber-util-rate"><input id="uber-util-rate" value={value.utilizationIncentivePct} onChange={set('utilizationIncentivePct')} placeholder="0.05" /></Field>
+        </div>}
+      </div>
+      {value.coreHoursRuleType === 'CONTINUOUS_COVERAGE' && <Alert tone="warn">Continuous coverage requires operational coverage validation. It is displayed for review and currently does not alter Gross VDP.</Alert>}
       <div className="grid grid-3" style={{ alignItems: 'start', marginTop: 10 }}>
         <UberTierEditor title="Contract-hours tiers" tiers={value.contractHoursIncentiveTiers} thresholdKey="minimum" thresholdLabel="Minimum fulfillment" onChange={tiers('contractHoursIncentiveTiers')} />
         <UberTierEditor title="Acceptance tiers" tiers={value.acceptanceIncentiveTiers} thresholdKey="minimum" thresholdLabel="Minimum acceptance" onChange={tiers('acceptanceIncentiveTiers')} />
@@ -378,7 +438,10 @@ function VersionModal({ plan, version, mode, onClose, onSaved }) {
 
 export function planSummary(v) {
   if (!v) return 'No version';
-  if (v.calculationType === 'UBER') return `Operator-profile rate and hours | ${v.uberConfig?.contractHoursIncentiveTiers?.length || 0} fulfillment tiers`;
+  if (v.calculationType === 'UBER') {
+    const banded = v.uberConfig?.rateStructureType === 'HOURLY_BANDS';
+    return `${banded ? `${v.uberConfig?.hourlyRateBands?.length || 0} hourly bands` : 'Operator-profile rate'} and operator hours | ${v.uberConfig?.contractHoursIncentiveTiers?.length || 0} fulfillment tiers`;
+  }
   const unit = v.paymentType === 'HOURLY' ? '/hr' : '/trip';
   const parts = [`${rate(v.basePay)}${unit} base`];
   if (v.contractedHours) parts.push(`${num(v.contractedHours)} h/week`);
@@ -387,6 +450,42 @@ export function planSummary(v) {
   if (fuelMethodOf(v) === 'PER_TRIP') parts.push(`fuel ${rate(v.fuelReimbursementRate)}/trip`);
   if (fuelMethodOf(v) === 'SERVICE_MILE_ALLOWANCE') parts.push(`fuel allowance ${num(v.fuelMpg)} MPG`);
   return parts.join(' · ');
+}
+
+function UberRulesSummary({ config }) {
+  const u = {
+    ...DEFAULT_UBER_CONFIG,
+    ...config,
+    minimumFulfillmentForIncentives: config.minimumFulfillmentForIncentives
+      || config.contractHoursIncentiveTiers?.[0]?.minimum || '0.94',
+    belowThresholdBehavior: config.belowThresholdBehavior || 'FARES_ONLY',
+    rateStructureType: config.rateStructureType || 'FLAT',
+    utilizationEnabled: config.utilizationEnabled ?? true,
+    coreHoursRuleType: config.coreHoursRuleType || 'PERCENTAGE',
+  };
+  const coreRule = u.coreHoursRuleType === 'PERCENTAGE'
+    ? `${pct(Number(u.coreHoursRequirement) * 100)} (visibility only)`
+    : u.coreHoursRuleType === 'CONTINUOUS_COVERAGE'
+      ? 'Continuous coverage · requires validation'
+      : 'None';
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <h3 style={{ margin: '4px 0 8px' }}>Uber compensation rules</h3>
+      <div className="kv">
+        <div><div className="k">Core rate</div><div className="v">{pct(Number(u.coreRatePct) * 100)}</div></div>
+        <div><div className="k">Approved extra hours default</div><div className="v">{num(u.approvedExtraHours)}</div></div>
+        <div><div className="k">Incentive qualification</div><div className="v">{pct(Number(u.minimumFulfillmentForIncentives) * 100)} minimum</div></div>
+        <div><div className="k">Below threshold</div><div className="v">{u.belowThresholdBehavior === 'CORE_ONLY' ? 'Core only' : 'Fares only'}</div></div>
+        <div><div className="k">Rate structure</div><div className="v">{u.rateStructureType === 'HOURLY_BANDS' ? 'Hourly bands' : 'Flat operator-profile rate'}</div></div>
+        {u.rateStructureType === 'HOURLY_BANDS' && <div><div className="k">Hourly bands</div><div className="v small">{u.hourlyRateBands.map((band) => `${num(band.fromHour)}–${num(band.toHour)} h: ${rate(band.hourlyRate)}`).join(' | ')}</div></div>}
+        <div><div className="k">Utilization incentive</div><div className="v">{u.utilizationEnabled ? `${pct(Number(u.utilizationTarget) * 100)} target / ${pct(Number(u.utilizationIncentivePct) * 100)}` : 'Disabled'}</div></div>
+        <div><div className="k">Core hours rule</div><div className="v">{coreRule}</div></div>
+        <div><div className="k">Contract-hours tiers</div><div className="v small">{u.contractHoursIncentiveTiers.map((t) => `${pct(Number(t.minimum) * 100)}+: ${pct(Number(t.rate) * 100)}`).join(' | ')}</div></div>
+        <div><div className="k">Acceptance tiers</div><div className="v small">{u.acceptanceIncentiveTiers.map((t) => `${pct(Number(t.minimum) * 100)}+: ${pct(Number(t.rate) * 100)}`).join(' | ')}</div></div>
+        <div><div className="k">Cancellation tiers</div><div className="v small">{u.cancellationIncentiveTiers.map((t) => `up to ${pct(Number(t.maximum) * 100)}: ${pct(Number(t.rate) * 100)}`).join(' | ')}</div></div>
+      </div>
+    </div>
+  );
 }
 
 export function PlanList() {
@@ -485,27 +584,14 @@ export function PlanDetail() {
               actions={isAdmin && !v.locked && <button className="btn btn-sm" onClick={() => setModal({ mode: 'edit', version: v })}>Edit</button>}>
               <div className="kv" style={{ marginBottom: 14 }}>
                 <div><div className="k">Plan / service type</div><div className="v">{v.calculationType === 'UBER' ? 'Uber' : PAYMENT_TYPE_LABELS[v.paymentType]}</div></div>
-                <div><div className="k">{v.calculationType === 'UBER' ? 'Base hourly rate' : 'Base pay'}</div><div className="v">{v.calculationType === 'UBER' ? 'Operator profile' : <>{rate(v.basePay)}{v.paymentType === 'HOURLY' ? '/hour' : '/trip'}</>}</div></div>
+                <div><div className="k">{v.calculationType === 'UBER' ? 'Base hourly rate' : 'Base pay'}</div><div className="v">{v.calculationType === 'UBER' ? (v.uberConfig?.rateStructureType === 'HOURLY_BANDS' ? 'Plan hourly bands' : 'Operator profile') : <>{rate(v.basePay)}{v.paymentType === 'HOURLY' ? '/hour' : '/trip'}</>}</div></div>
                 <div><div className="k">Contracted hours</div><div className="v">{v.calculationType === 'UBER' ? 'Operator profile' : v.contractedHours ? `${num(v.contractedHours)} / week` : '—'}</div></div>
                 {v.calculationType !== 'UBER' && <div><div className="k">Performance hours</div><div className="v">{METRIC_LABELS[v.performanceHourMetric]}{v.performanceHourColumn ? ` (${v.performanceHourColumn})` : ''}</div></div>}
                 {v.calculationType !== 'UBER' && <div><div className="k">TUI eligible</div><div className="v">{v.incentiveEnabled ? <Badge tone="ok">On</Badge> : <Badge>Off</Badge>}</div></div>}
                 {v.calculationType !== 'UBER' && <div><div className="k">Bonus rate</div><div className="v">{v.bonusEnabled ? `${rate(v.bonusRate)}/hour above contract` : 'None'}</div></div>}
                 {v.calculationType !== 'UBER' && <div><div className="k">Fuel</div><div className="v">{fuelSummary(v)}</div></div>}
               </div>
-              {v.calculationType === 'UBER' && v.uberConfig && (
-                <div style={{ marginBottom: 14 }}>
-                  <h3 style={{ margin: '4px 0 8px' }}>Uber compensation rules</h3>
-                  <div className="kv">
-                    <div><div className="k">Core rate</div><div className="v">{pct(Number(v.uberConfig.coreRatePct) * 100)}</div></div>
-                    <div><div className="k">Approved extra hours default</div><div className="v">{num(v.uberConfig.approvedExtraHours)}</div></div>
-                    <div><div className="k">Utilization target / incentive</div><div className="v">{pct(Number(v.uberConfig.utilizationTarget) * 100)} / {pct(Number(v.uberConfig.utilizationIncentivePct) * 100)}</div></div>
-                    <div><div className="k">Core hours requirement</div><div className="v">{pct(Number(v.uberConfig.coreHoursRequirement) * 100)} (visibility only)</div></div>
-                    <div><div className="k">Contract-hours tiers</div><div className="v small">{v.uberConfig.contractHoursIncentiveTiers.map((t) => `${pct(Number(t.minimum) * 100)}+: ${pct(Number(t.rate) * 100)}`).join(' | ')}</div></div>
-                    <div><div className="k">Acceptance tiers</div><div className="v small">{v.uberConfig.acceptanceIncentiveTiers.map((t) => `${pct(Number(t.minimum) * 100)}+: ${pct(Number(t.rate) * 100)}`).join(' | ')}</div></div>
-                    <div><div className="k">Cancellation tiers</div><div className="v small">{v.uberConfig.cancellationIncentiveTiers.map((t) => `up to ${pct(Number(t.maximum) * 100)}: ${pct(Number(t.rate) * 100)}`).join(' | ')}</div></div>
-                  </div>
-                </div>
-              )}
+              {v.calculationType === 'UBER' && v.uberConfig && <UberRulesSummary config={v.uberConfig} />}
               {fuelMethodOf(v) === 'SERVICE_MILE_ALLOWANCE' && v._id === plan.currentVersionId && (
                 <div style={{ marginBottom: 14 }}>
                   <div className="actions" style={{ justifyContent: 'space-between', marginBottom: 6 }}>

@@ -56,6 +56,14 @@ function UberCalculationRow({ row, tollAdjustments, vdpId, editable, onChanged }
     .reduce((total, adjustment) => total + Number(adjustment.amount || 0), 0);
   const tollDeductions = (tollAdjustments || []).filter((adjustment) => adjustment.tollDirection === 'DEDUCTION')
     .reduce((total, adjustment) => total + Number(adjustment.amount || 0), 0);
+  const coreStatus = row.coreHoursValidationStatus === 'REQUIRES_COVERAGE_VALIDATION'
+    ? <Badge tone="warn">Validate coverage</Badge>
+    : row.coreHoursValidationStatus === 'NOT_APPLICABLE'
+      ? <Badge>Not required</Badge>
+      : row.coreHoursPassed
+        ? <Badge tone="ok">Pass</Badge>
+        : <Badge tone="warn">Below target</Badge>;
+  const belowThresholdLabel = row.belowThresholdBehavior === 'CORE_ONLY' ? 'Core only' : 'Fares only';
   return (
     <>
       <tr>
@@ -63,11 +71,11 @@ function UberCalculationRow({ row, tollAdjustments, vdpId, editable, onChanged }
         <td className="nowrap">{date(row.week)}</td>
         <td><div className="strong">{row.vehicleUnit ? `Vehicle ${row.vehicleUnit}` : row.calculationUnitLabel}</div><div className="muted small">{operators.join(', ')}{operators.length > 1 && <> <Badge tone="outline">Shared</Badge></>}</div></td>
         <td className="num"><strong>{num(row.qualifyingSupplyHours)}</strong> / {num(row.contractedHours)} / {num(row.payableHours)}</td>
-        <td className="num"><div className="strong">{ratioPct(row.fulfillment)}</div>{row.qualified ? <Badge tone="ok">Qualified</Badge> : <Badge tone="warn">Fallback</Badge>}</td>
+        <td className="num"><div className="strong">{ratioPct(row.fulfillment)}</div>{row.qualified ? <Badge tone="ok">Qualified</Badge> : <Badge tone="warn">{belowThresholdLabel}</Badge>}</td>
         <td className="num">{ratioPct(row.acceptanceRate)}<div className="muted small">tier {ratioPct(row.acceptanceIncentivePct)}</div></td>
         <td className="num">{ratioPct(row.cancellationRate)}<div className="muted small">tier {ratioPct(row.cancellationIncentivePct)}</div></td>
-        <td className="num">{ratioPct(row.utilizationRate)}<div className="muted small">tier {ratioPct(row.utilizationIncentivePct)}</div></td>
-        <td className="num">{ratioPct(row.coreHoursPct)}<div>{row.coreHoursPassed ? <Badge tone="ok">Pass</Badge> : <Badge tone="warn">Below target</Badge>}</div></td>
+        <td className="num">{row.utilizationEnabled === false ? <Badge>Disabled</Badge> : <>{ratioPct(row.utilizationRate)}<div className="muted small">tier {ratioPct(row.utilizationIncentivePct)}</div></>}</td>
+        <td className="num">{ratioPct(row.coreHoursPct)}<div>{coreStatus}</div></td>
         <td className="num">{money(row.grossVdp)}{tollCredits > 0 && <div className="plus small">+{money(tollCredits)} toll credit</div>}{tollDeductions > 0 && <div className="minus small">−{money(tollDeductions)} toll bill</div>}</td>
       </tr>
       {error && <tr><td colSpan={10}><ErrorAlert error={error} /></td></tr>}
@@ -80,21 +88,31 @@ function UberCalculationRow({ row, tollAdjustments, vdpId, editable, onChanged }
               <div><div className="k">Core compensation</div><div className="v">{money(row.coreCompensation)}</div></div>
               <div><div className="k">Contract-hours incentive</div><div className="v">{money(row.contractHoursIncentive)} · {ratioPct(row.hourIncentivePct)}</div></div>
               <div><div className="k">Acceptance / cancellation</div><div className="v">{money(row.acceptanceCancellationIncentive)} · {ratioPct(row.acceptanceCancellationPct)}</div></div>
-              <div><div className="k">Utilization incentive</div><div className="v">{money(row.utilizationIncentive)} · {ratioPct(row.utilizationIncentivePct)}</div></div>
+              <div><div className="k">Utilization incentive</div><div className="v">{row.utilizationEnabled === false ? 'Disabled · $0.00' : <>{money(row.utilizationIncentive)} · {ratioPct(row.utilizationIncentivePct)}</>}</div></div>
               <div><div className="k">Tips</div><div className="v">{money(row.tips)}</div></div>
               <div><div className="k">Earnings excl. tips (fallback)</div><div className="v">{money(row.driverEarningsExclTips)}</div></div>
               <div><div className="k">Calculated pay</div><div className="v">{money(row.grossVdp)}</div></div>
             </div>
+            {row.rateStructureType === 'HOURLY_BANDS' && <div className="table-wrap" style={{ marginTop: 10 }}><table className="table-compact">
+              <thead><tr><th>Rate band</th><th className="num">Hours</th><th className="num">Rate</th><th className="num">Compensation</th></tr></thead>
+              <tbody>{(row.baseCompensationBreakdown || []).map((band, index) => <tr key={index}>
+                <td>{num(band.fromHour)}–{num(band.toHour)} hours</td><td className="num">{num(band.hours)}</td><td className="num">{rate(band.hourlyRate)}</td><td className="num">{money(band.amount)}</td>
+              </tr>)}</tbody>
+            </table></div>}
           </div>
           <div>
             <strong>Contract and calculation inputs</strong>
             <div className="kv" style={{ marginTop: 10 }}>
-              <div><div className="k">Base hourly rate</div><div className="v">{rate(row.settingsUsed?.baseHourlyRate)} / hour</div></div>
+              <div><div className="k">Rate structure</div><div className="v">{row.rateStructureType === 'HOURLY_BANDS' ? 'Hourly bands' : `${rate(row.settingsUsed?.baseHourlyRate)} / hour flat`}</div></div>
               <div><div className="k">Contracted hours</div><div className="v">{num(row.contractedHours)} / week</div></div>
+              <div><div className="k">Incentive qualification</div><div className="v">{ratioPct(row.qualificationThreshold)} minimum</div></div>
+              <div><div className="k">Below threshold</div><div className="v">{belowThresholdLabel}</div></div>
+              <div><div className="k">Utilization</div><div className="v">{row.utilizationEnabled === false ? 'Disabled' : 'Enabled'}</div></div>
+              <div><div className="k">Core-hours rule</div><div className="v">{row.coreHoursRuleType === 'CONTINUOUS_COVERAGE' ? 'Continuous coverage' : row.coreHoursRuleType === 'NONE' ? 'None' : 'Percentage of contracted hours'}</div></div>
               <div><div className="k">Total supply / paused</div><div className="v">{num(row.totalSupplyHours)} / {num(row.pausedHours)} h</div></div>
               <div><div className="k">Total offers</div><div className="v">{num(row.totalOffers)}</div></div>
               <div><div className="k">Source</div><div className="v small">{row.sourceFileName || '-'}</div></div>
-              <div><div className="k">Rate source</div><div className="v"><span className="source-tag source-override">Provider profile</span></div></div>
+              <div><div className="k">Rate source</div><div className="v"><span className={`source-tag ${row.rateStructureType === 'HOURLY_BANDS' ? 'source-plan' : 'source-override'}`}>{row.rateStructureType === 'HOURLY_BANDS' ? 'VDP plan' : 'Provider profile'}</span></div></div>
             </div>
             {editable && <div className="actions" style={{ marginTop: 12 }}>
               <Field label="Approved extra hours"><input aria-label={`Approved extra hours ${row.calculationUnitId} ${row.week}`} value={approvedExtraHours} onChange={(e) => setApprovedExtraHours(e.target.value)} style={{ width: 90 }} /></Field>

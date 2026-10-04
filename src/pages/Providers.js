@@ -180,6 +180,7 @@ export function ProviderProfile() {
   const s = p.paymentSettings;
   const perTrip = s?.paymentType.value === 'PER_TRIP';
   const uber = s?.calculationType?.value === 'UBER';
+  const bandedUber = uber && s?.uberConfig?.value?.rateStructureType === 'HOURLY_BANDS';
 
   return (
     <div className="page">
@@ -215,7 +216,7 @@ export function ProviderProfile() {
                 <tbody>
                   <SettingRow label="Payment type" setting={s.paymentType} render={(v) => PAYMENT_TYPE_LABELS[v]} />
                   {uber
-                    ? <tr><td>Base hourly rate</td><td>{s.basePay.value ? `${rate(s.basePay.value)} / hour` : 'Set on provider or operator'}</td><td><span className="source-tag source-override">{s.basePay.value ? 'Provider profile' : 'Profile required'}</span></td></tr>
+                    ? <tr><td>Base hourly rate</td><td>{bandedUber ? 'Configured hourly bands' : s.basePay.value ? `${rate(s.basePay.value)} / hour` : 'Set on provider or operator'}</td><td><span className={`source-tag ${bandedUber ? 'source-plan' : 'source-override'}`}>{bandedUber ? 'Plan' : s.basePay.value ? 'Provider profile' : 'Profile required'}</span></td></tr>
                     : <SettingRow label={perTrip ? 'Base pay (per trip)' : 'Base pay (per hour)'} setting={s.basePay} render={rate} />}
                   {uber
                     ? <tr><td>Contracted hours</td><td>Set per operator below</td><td><span className="source-tag source-override">Operator profile</span></td></tr>
@@ -248,7 +249,7 @@ export function ProviderProfile() {
       <Card title="Operators" hint="Uber operators sharing a vehicle are combined into one weekly pay unit; the provider is paid the total." body={false}>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Operator</th><th>Vehicle / pay unit</th><th>Route / run</th><th>VDP plan</th>{uber && <th>Base hourly rate</th>}<th>Contracted hours</th><th>Lift lease</th><th>Status</th><th /></tr></thead>
+            <thead><tr><th>Operator</th><th>Vehicle / pay unit</th><th>Route / run</th><th>VDP plan</th>{uber && !bandedUber && <th>Base hourly rate</th>}<th>Contracted hours</th><th>Lift lease</th><th>Status</th><th /></tr></thead>
             <tbody>
               {(p.operators || []).map((o) => {
                 const basePay = o.basePay || p.overrides?.basePay;
@@ -263,7 +264,7 @@ export function ProviderProfile() {
                   <td>{o.planId
                     ? <><Link to={`/plans/${o.planId}`}>{planName(o.planId)}</Link> <span className="source-tag source-override">Operator</span></>
                     : <>{p.plan?.name || '—'} <span className="source-tag source-plan">Provider</span></>}</td>
-                  {uber && <td>{basePay
+                  {uber && !bandedUber && <td>{basePay
                     ? <>{rate(basePay)} / hour <span className={`source-tag ${o.basePay ? 'source-override' : 'source-plan'}`}>{o.basePay ? 'Operator' : 'Provider'}</span></>
                     : <Badge tone="bad">Required for Uber</Badge>}</td>}
                   <td>{o.contractedHours
@@ -332,7 +333,7 @@ const operatorForm = (o) => ({
   transferredFrom: o.transferredFrom || null, // shown only; dates are set by "Move to another provider"
 });
 
-function OperatorsEditor({ operators, onChange, planHours, providerBasePay, requireProfileHours = false, plans = [], providerPlanId }) {
+function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber = false, requireBaseRate = false, plans = [], providerPlanId }) {
   const planChoices = plans.filter((p) => p._id !== providerPlanId && (p.status === 'ACTIVE' || operators.some((o) => o.planId === p._id)));
   const update = (i, patch) => onChange(operators.map((o, j) => (j === i ? { ...o, ...patch } : o)));
   const lease = (i, k, v) => update(i, { liftLease: { ...operators[i].liftLease, [k]: v } });
@@ -341,7 +342,7 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, requ
       <div className="table-wrap">
         <table className="table-compact">
           <thead>
-            <tr><th>Operator</th><th>Vehicle / pay unit</th><th>Route / run</th><th>VDP plan</th>{requireProfileHours && <th>Base $/hour</th>}<th>Contracted h/week</th><th>Lift lease</th><th>Lease amount ($)</th><th>Status</th><th /></tr>
+            <tr><th>Operator</th><th>Vehicle / pay unit</th><th>Route / run</th><th>VDP plan</th>{requireBaseRate && <th>Base $/hour</th>}<th>Contracted h/week</th><th>Lift lease</th><th>Lease amount ($)</th><th>Status</th><th /></tr>
           </thead>
           <tbody>
             {operators.map((o, i) => (
@@ -358,8 +359,8 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, requ
                     {planChoices.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
                   </select>
                 </td>
-                {requireProfileHours && <td><input aria-label={`Operator ${i + 1} base hourly rate`} value={o.basePay} onChange={(e) => update(i, { basePay: e.target.value })} placeholder={providerBasePay ? `Provider: ${rate(providerBasePay)}` : 'Optional override'} style={{ width: 110 }} /></td>}
-                <td><input aria-label={`Operator ${i + 1} contracted hours`} value={o.contractedHours} onChange={(e) => update(i, { contractedHours: e.target.value })} placeholder={requireProfileHours ? 'Required' : planHours ? `Plan: ${num(planHours)}` : 'Plan'} style={{ width: 90 }} /></td>
+                {requireBaseRate && <td><input aria-label={`Operator ${i + 1} base hourly rate`} value={o.basePay} onChange={(e) => update(i, { basePay: e.target.value })} placeholder={providerBasePay ? `Provider: ${rate(providerBasePay)}` : 'Optional override'} style={{ width: 110 }} /></td>}
+                <td><input aria-label={`Operator ${i + 1} contracted hours`} value={o.contractedHours} onChange={(e) => update(i, { contractedHours: e.target.value })} placeholder={uber ? 'Required' : planHours ? `Plan: ${num(planHours)}` : 'Plan'} style={{ width: 90 }} /></td>
                 <td>
                   <select aria-label={`Operator ${i + 1} lease frequency`} value={o.liftLease.frequency} onChange={(e) => lease(i, 'frequency', e.target.value)}>
                     <option value="WEEKLY">Weekly</option><option value="PER_VDP_CYCLE">Per VDP cycle</option><option value="NONE">No lease</option>
@@ -380,8 +381,8 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, requ
       <div className="actions"><button type="button" className="btn btn-sm" onClick={() => onChange([...operators, blankOperator()])}>Add operator</button></div>
       <p className="help muted small">
         Routes as shown in the Performance Report “Run/Route” column; separate several with commas. A route belongs to one operator.
-        {requireProfileHours ? 'Uber uses the provider base hourly rate unless an operator-specific rate is entered; contracted hours stay on the provider profile. Give operators the same Vehicle / pay unit when they share one vehicle contract. Their weekly data is combined for eligibility and the vehicle lease is charged once. ' : ''}
-        Operators without a shared vehicle are measured against their own contracted hours{requireProfileHours ? '' : ' (blank = plan)'}, and each distinct vehicle lease is charged once.
+        {uber ? `${requireBaseRate ? 'This flat-rate Uber plan uses the provider base hourly rate unless an operator-specific rate is entered. ' : 'This Uber plan gets its hourly rates from plan bands. '}Contracted hours stay on each operator profile. Give operators the same Vehicle / pay unit when they share one vehicle contract. Their weekly data is combined for eligibility and the vehicle lease is charged once. ` : ''}
+        Operators without a shared vehicle are measured against their own contracted hours{uber ? '' : ' (blank = plan)'}, and each distinct vehicle lease is charged once.
         An operator on a different VDP plan is paid entirely under that plan (rates, TUI, hours column, fuel); the provider’s overrides stay with the provider’s plan.
         The provider receives one VDP with the total.
       </p>
@@ -428,6 +429,8 @@ export function ProviderEdit() {
   const setIn = (group, k) => (e) => setForm({ ...form, [group]: { ...form[group], [k]: e.target.value } });
   const plan = plans.data?.find((p) => p._id === form.planId);
   const cur = plan?.versions.find((v) => v._id === plan.currentVersionId);
+  const uber = cur?.calculationType === 'UBER';
+  const requireUberBaseRate = uber && (cur.uberConfig?.rateStructureType || 'FLAT') === 'FLAT';
 
   const save = async () => {
     setBusy(true);
@@ -472,7 +475,7 @@ export function ProviderEdit() {
         </Card>
 
         <Card title="Operators" hint="The provider is the one who gets paid. Add each operator (driver) who works for them.">
-          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} requireProfileHours={cur?.calculationType === 'UBER'} plans={plans.data || []} providerPlanId={form.planId} />
+          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={plans.data || []} providerPlanId={form.planId} />
           {form.movedAway?.length > 0 && (
             <p className="muted small" style={{ marginTop: 8 }}>
               Moved to another provider (kept for earlier cycles): {form.movedAway.map((o) => `${o.name} → ${o.transferredTo.providerName} from ${date(o.transferredTo.effectiveDate)}`).join('; ')}.
@@ -499,10 +502,10 @@ export function ProviderEdit() {
               {cur?.calculationType !== 'UBER' && <Field label="Contracted hours override (all operators)" htmlFor="f-hours" help={`${inheritHint(cur?.contractedHours, ' h/week')} An operator’s own contracted hours take priority.`}>
                 <input id="f-hours" value={form.overrides.contractedHours} onChange={setIn('overrides', 'contractedHours')} />
               </Field>}
-              <Field label={cur?.calculationType === 'UBER' ? 'Uber base hourly rate (all operators)' : 'Base pay override'} htmlFor="f-base"
-                help={cur?.calculationType === 'UBER' ? 'Stored on the provider profile. Operator-specific rates above take priority.' : inheritHint(cur?.basePay && rate(cur.basePay))}>
+              {(!uber || requireUberBaseRate) && <Field label={uber ? 'Uber base hourly rate (all operators)' : 'Base pay override'} htmlFor="f-base"
+                help={uber ? 'Stored on the provider profile. Operator-specific rates above take priority.' : inheritHint(cur?.basePay && rate(cur.basePay))}>
                 <input id="f-base" value={form.overrides.basePay} onChange={setIn('overrides', 'basePay')} />
-              </Field>
+              </Field>}
               {(fuelMethodOf(cur) === 'SERVICE_MILE_ALLOWANCE' || form.overrides.fuelMpg) && (
                 <Field label="Fuel MPG override" htmlFor="f-mpg" help={`${inheritHint(cur?.fuelMpg, ' MPG')} Only when this provider’s vehicle is on a different fuel efficiency.`}>
                   <input id="f-mpg" value={form.overrides.fuelMpg} onChange={setIn('overrides', 'fuelMpg')} />
