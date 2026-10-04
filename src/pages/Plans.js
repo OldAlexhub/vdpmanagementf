@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { api } from '../api';
+import { api, downloadFile } from '../api';
 import { useAuth } from '../App';
 import { date, isoDate, rate, num, pct, METRIC_LABELS, PAYMENT_TYPE_LABELS } from '../format';
 import { ActiveBadge, Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
@@ -557,6 +557,13 @@ export function PlanDetail() {
   const [modal, setModal] = useState(null);
   const [editMeta, setEditMeta] = useState(null);
   const [pricing, setPricing] = useState(false);
+  const [downloadingReport, setDownloadingReport] = useState(false);
+
+  const downloadPlanReport = async () => {
+    setDownloadingReport(true);
+    try { await downloadFile(`/vdp-plans/${id}/report.pdf`); } catch (e) { toast(e.message, 'bad'); }
+    finally { setDownloadingReport(false); }
+  };
 
   if (loading) return <div className="page"><Loading /></div>;
   if (error) return <div className="page"><ErrorAlert error={error} /></div>;
@@ -568,10 +575,11 @@ export function PlanDetail() {
         crumbs={<Link to="/plans">VDP Plans</Link>}
         title={<>{plan.name} <ActiveBadge status={plan.status} /></>}
         sub={plan.notes}
-        actions={isAdmin && (
+        actions={(
           <>
-            <button className="btn" onClick={() => setEditMeta({ name: plan.name, notes: plan.notes || '', status: plan.status })}>Edit plan</button>
-            <button className="btn btn-primary" onClick={() => setModal({ mode: 'add', version: current })}>New version (rate change)</button>
+            <button className="btn" disabled={downloadingReport} onClick={downloadPlanReport}>{downloadingReport ? 'Preparing PDF...' : 'Executive PDF'}</button>
+            {isAdmin && <button className="btn" onClick={() => setEditMeta({ name: plan.name, notes: plan.notes || '', status: plan.status })}>Edit plan</button>}
+            {isAdmin && <button className="btn btn-primary" onClick={() => setModal({ mode: 'add', version: current })}>New version (rate change)</button>}
           </>
         )}
       />
