@@ -258,22 +258,90 @@ export function OperatorsCard({ calc, perTrip, settings }) {
   );
 }
 
-export function EarningsCard({ calc, perTrip }) {
-  if (!calc) return null;
-  const weeks = calc.weeks;
+const nonZero = (value) => Math.abs(Number(value || 0)) > 0.000001;
+
+function UberGrossFormula({ row }) {
+  const components = row.qualified
+    ? [
+        ['Core', row.coreCompensation],
+        ['Contract-hours incentive', row.contractHoursIncentive],
+        ['Acceptance / cancellation', row.acceptanceCancellationIncentive],
+        ...(row.utilizationEnabled === false ? [] : [['Utilization', row.utilizationIncentive]]),
+        ['Tips', row.tips],
+        ...(nonZero(row.passThroughTotal) ? [['Pass-throughs', row.passThroughTotal]] : []),
+      ]
+    : [
+        [row.belowThresholdBehavior === 'CORE_ONLY' ? 'Core compensation' : 'Driver earnings', row.belowThresholdBehavior === 'CORE_ONLY' ? row.coreCompensation : row.driverEarningsExclTips],
+        ['Tips', row.tips],
+        ...(nonZero(row.passThroughTotal) ? [['Pass-throughs', row.passThroughTotal]] : []),
+      ];
   return (
-    <Card title="Earnings" body={false}>
-      <table>
-        <thead><tr><th />{weeks.map((x) => <th key={x.weekNumber} className="num">Week {x.weekNumber}</th>)}</tr></thead>
-        <tbody>
-          <Row label={perTrip ? 'Trip earnings' : 'Core earnings'} values={weeks.map((x) => x.coreEarnings)} render={money} />
-          {!perTrip && <Row label="Bonus earnings" values={weeks.map((x) => x.bonusEarnings)} render={money} />}
-          <Row label="Week total" values={weeks.map((x) => x.weeklyEarnings)} render={money} strong />
-        </tbody>
-        <tfoot>
-          <tr><td>Gross VDP</td><td colSpan={weeks.length} className="num" style={{ fontSize: 16 }}>{money(calc.gross)}</td></tr>
-        </tfoot>
-      </table>
+    <div>
+      <div className="small">{components.map(([label, value], index) => <span key={label}>{index > 0 && ' + '}{label} {money(value)}</span>)}</div>
+      <div className="muted small">{row.qualified
+        ? `${ratioPct(row.fulfillment)} fulfillment - qualified compensation`
+        : `${ratioPct(row.fulfillment)} fulfillment - ${row.belowThresholdBehavior === 'CORE_ONLY' ? 'core-only' : 'fares-only'} fallback`}</div>
+    </div>
+  );
+}
+
+export function GrossIncomeBreakdown({ calc, perTrip }) {
+  if (!calc) return null;
+  if (calc.calculationType === 'UBER') {
+    const rows = calc.uberRows || [];
+    return (
+      <Card title="Gross income breakdown" hint="Every pay unit and income component that adds to Gross VDP. Deductions and post-Gross additions are shown separately in Net payment." body={false}>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Week</th><th>Vehicle / pay unit</th><th>Income formula</th><th className="num">Gross income</th></tr></thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={`${row.calculationUnitId}-${row.week}`}>
+                  <td className="nowrap">{date(row.week)}</td>
+                  <td><div className="strong">{row.vehicleUnit ? `Vehicle ${row.vehicleUnit}` : row.calculationUnitLabel}</div><div className="muted small">{(row.operatorNames || [row.operatorName]).filter(Boolean).join(', ')}</div></td>
+                  <td><UberGrossFormula row={row} /></td>
+                  <td className="num strong">{money(row.grossVdp)}</td>
+                </tr>
+              ))}
+              <tr><td colSpan={3}>Calculated Uber pay</td><td className="num strong">{money(calc.calculatedGross)}</td></tr>
+              {nonZero(calc.adjustmentTolls) && <tr><td colSpan={3}>Toll credits included in Gross</td><td className="num plus">+{money(calc.adjustmentTolls)}</td></tr>}
+            </tbody>
+            <tfoot><tr><td colSpan={3}>Gross VDP</td><td className="num" style={{ fontSize: 16 }}>{money(calc.gross)}</td></tr></tfoot>
+          </table>
+        </div>
+        {nonZero(calc.adjustmentTollDeductions) && <div className="card-body muted small">Toll bills of {money(calc.adjustmentTollDeductions)} are excluded from Gross and appear under deductions.</div>}
+      </Card>
+    );
+  }
+
+  const operatorWeeks = (calc.operators || []).flatMap((operator) => operator.weeks.map((week) => ({ operator, week })));
+  const rows = operatorWeeks.length
+    ? operatorWeeks
+    : (calc.weeks || []).map((week) => ({ operator: { name: '', paymentType: perTrip ? 'PER_TRIP' : 'HOURLY' }, week }));
+  return (
+    <Card title="Gross income breakdown" hint="Gross VDP is earned compensation before lift lease, fares, other deductions, fuel reimbursements, and other additions." body={false}>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Week</th><th>Operator</th><th>Income formula</th><th className="num">Gross income</th></tr></thead>
+          <tbody>
+            {rows.map(({ operator, week }, index) => {
+              const tripPay = (operator.paymentType || (perTrip ? 'PER_TRIP' : 'HOURLY')) === 'PER_TRIP';
+              const formula = tripPay
+                ? `${num(week.trips)} trips x ${rate(week.incentiveRate)}`
+                : `${num(week.corePaidHours)} core h x ${rate(week.incentiveRate)}${nonZero(week.bonusEarnings) ? ` + ${num(week.bonusHours)} bonus h x ${rate(week.bonusRate)}` : ''}`;
+              return (
+                <tr key={`${operator.name}-${week.weekNumber}-${index}`}>
+                  <td>Week {week.weekNumber}</td>
+                  <td>{operator.name || 'Provider'}{week.tierLabel && <div className="muted small">{week.tierLabel}</div>}</td>
+                  <td>{formula}<div className="muted small">{tripPay ? 'Trip earnings' : `Core ${money(week.coreEarnings)}${nonZero(week.bonusEarnings) ? ` + bonus ${money(week.bonusEarnings)}` : ''}`}</div></td>
+                  <td className="num strong">{money(week.weeklyEarnings)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot><tr><td colSpan={3}>Gross VDP</td><td className="num" style={{ fontSize: 16 }}>{money(calc.gross)}</td></tr></tfoot>
+        </table>
+      </div>
     </Card>
   );
 }
@@ -648,10 +716,13 @@ export default function VdpReview() {
         <div className="split">
           <div className="stack">
             {!v.calculation && !v.performance && <Card><Empty title="Not calculated">Resolve the issues above, then recalculate.</Empty></Card>}
-            {uber ? <UberCalculationCard vdp={vdp} editable={editable} onChanged={(d) => { setData(d); toast('Uber weekly adjustment saved'); }} /> : <>
+            {uber ? <>
+              <GrossIncomeBreakdown calc={v.calculation} perTrip={perTrip} />
+              <UberCalculationCard vdp={vdp} editable={editable} onChanged={(d) => { setData(d); toast('Uber weekly adjustment saved'); }} />
+            </> : <>
               <PerformanceCard view={v} />
               <OperatorsCard calc={v.calculation} perTrip={perTrip} settings={v.settings} />
-              <EarningsCard calc={v.calculation} perTrip={perTrip} />
+              <GrossIncomeBreakdown calc={v.calculation} perTrip={perTrip} />
               <FuelCard key={`${vdp._id}-${vdp.view.fuelExpense?.amount ?? ''}`} vdp={vdp} editable={editable} onChanged={(d) => { setData(d); toast('Fuel expense saved'); }} />
             </>}
             <AdjustmentsCard vdp={vdp} types={types.data || []} editable={editable} onChanged={(d) => { setData(d); toast('VDP updated'); }} />

@@ -6,7 +6,7 @@ import ExplainCalculation from '../components/Explain';
 import { IssueList, ReportIssueModal } from '../components/Issues';
 import { cycleLabel, date, dateTime, deadlineLabel, money, num, rate, LEASE_LABELS } from '../format';
 import { Alert, Badge, Card, Confirm, Empty, ErrorAlert, Loading, PageHead, useLoad, useToast } from '../components/ui';
-import { EarningsCard, NetCard, OperatorsCard, PerformanceCard } from './VdpReview';
+import { GrossIncomeBreakdown, NetCard, OperatorsCard, PerformanceCard } from './VdpReview';
 import { PasswordCard } from './Settings';
 import PortalDashboard from './PortalDashboard';
 
@@ -159,7 +159,7 @@ function PortalStatement() {
           <div className="stack">
             <PerformanceCard view={v} />
             <OperatorsCard calc={v.calculation} perTrip={perTrip} settings={v.settings} />
-            <EarningsCard calc={v.calculation} perTrip={perTrip} />
+            <GrossIncomeBreakdown calc={v.calculation} perTrip={perTrip} />
             <AdjustmentList view={v} />
             <ExplainCalculation calc={v.calculation} settings={v.settings} />
           </div>

@@ -338,7 +338,12 @@ export function VdpTable({ cycleId, status, search, refreshKey }) {
               <td className="small">{v.planName || '—'}</td>
               <td className="num">{num(v.weeks?.[0]?.actualHours)}</td>
               <td className="num">{num(v.weeks?.[1]?.actualHours)}</td>
-              <td className="num">{money(v.gross)}</td>
+              <td className="num">
+                <div className="strong">{money(v.gross)}</div>
+                {v.weeks?.some((week) => week.weeklyEarnings !== null && week.weeklyEarnings !== undefined) && (
+                  <div className="muted small">{v.weeks.map((week, index) => `W${week.weekNumber || index + 1} ${money(week.weeklyEarnings)}`).join(' + ')}</div>
+                )}
+              </td>
               <td className="num">{money(v.totalDeductions)}</td>
               <td className="num strong">{money(v.net)}</td>
               <td className="nowrap">

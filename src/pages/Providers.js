@@ -298,7 +298,12 @@ export function ProviderProfile() {
             <tbody>
               {vdps.data.map((v) => (
                 <tr key={v._id} className="clickable" onClick={() => navigate(`/vdps/${v._id}`)}>
-                  <td>{cycleLabel(v.cycle)}</td><td><StatusBadge status={v.status} /></td><td className="num">{money(v.gross)}</td><td className="num strong">{money(v.net)}</td>
+                  <td>{cycleLabel(v.cycle)}</td><td><StatusBadge status={v.status} /></td><td className="num">
+                    <div>{money(v.gross)}</div>
+                    {v.weeks?.some((week) => week.weeklyEarnings !== null && week.weeklyEarnings !== undefined) && (
+                      <div className="muted small">{v.weeks.map((week, index) => `W${week.weekNumber || index + 1} ${money(week.weeklyEarnings)}`).join(' + ')}</div>
+                    )}
+                  </td><td className="num strong">{money(v.net)}</td>
                 </tr>
               ))}
             </tbody>
