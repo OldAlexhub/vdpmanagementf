@@ -35,7 +35,10 @@ export function ProviderList() {
   const status = params.get('status') ?? 'ACTIVE';
   const [importing, setImporting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [batchPlanId, setBatchPlanId] = useState('');
+  const [assigningPlan, setAssigningPlan] = useState(false);
   const divisions = useLoad(() => api.get('/divisions'), []);
+  const divisionPlans = useLoad(() => (divisionId ? api.get('/vdp-plans', { divisionId }) : Promise.resolve([])), [divisionId]);
   const compass = useLoad(() => api.get('/compass/status'), []);
   const { data, loading, error, reload } = useLoad(
     () => api.get('/providers', { divisionId, status, search: params.get('search') || '' }),
@@ -50,6 +53,7 @@ export function ProviderList() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
+  useEffect(() => { setBatchPlanId(''); }, [divisionId]);
   const setParam = (k, v) => { const next = Object.fromEntries(params); if (v === '' && k !== 'status') delete next[k]; else next[k] = v; setParams(next); };
   const compassManaged = Boolean(compass.data?.configured);
   const sync = async () => {
@@ -63,6 +67,18 @@ export function ProviderList() {
     } catch (error) {
       toast(error.message, 'bad');
     } finally { setSyncing(false); }
+  };
+  const assignPlan = async () => {
+    const division = divisions.data?.find((item) => item._id === divisionId);
+    const plan = divisionPlans.data?.find((item) => item._id === batchPlanId);
+    if (!division || !plan || !window.confirm(`Assign ${plan.name} to every provider in DIV ${division.divisionNumber}?`)) return;
+    setAssigningPlan(true);
+    try {
+      const result = await api.put(`/providers/division/${divisionId}/plan`, { planId: batchPlanId });
+      toast(`${plan.name} assigned to ${result.applied.providers} providers`);
+      reload();
+    } catch (error) { toast(error.message, 'bad'); }
+    setAssigningPlan(false);
   };
 
   return (
@@ -86,6 +102,15 @@ export function ProviderList() {
             <option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option><option value="">All</option>
           </select>
         </Field>
+        {isAdmin && divisionId && <Field label="Batch assign VDP plan" htmlFor="pv-batch-plan">
+          <div className="actions">
+            <select id="pv-batch-plan" value={batchPlanId} onChange={(e) => setBatchPlanId(e.target.value)} disabled={assigningPlan}>
+              <option value="">Choose a plan…</option>
+              {(divisionPlans.data || []).filter((plan) => plan.status === 'ACTIVE').map((plan) => <option key={plan._id} value={plan._id}>{plan.name}</option>)}
+            </select>
+            <button className="btn btn-primary" onClick={assignPlan} disabled={!batchPlanId || assigningPlan}>{assigningPlan ? 'Assigning…' : 'Assign to division'}</button>
+          </div>
+        </Field>}
       </div>
       <ErrorAlert error={error} />
       {loading ? <Loading /> : data && (
@@ -107,7 +132,7 @@ export function ProviderList() {
                         <td>{p.division ? `DIV ${p.division.divisionNumber}` : '—'}</td>
                         <td>{p.operatorName || '—'}{p.operators?.filter((o) => o.status === 'ACTIVE' && !o.transferredTo).length > 1 && <div className="muted small">{p.operators.filter((o) => o.status === 'ACTIVE' && !o.transferredTo).length} operators</div>}</td>
                         <td className="mono">{p.routes.join(', ') || <span className="muted">—</span>}</td>
-                        <td>{p.planName || <Badge tone="bad">No plan</Badge>} {p.planAssignment?.source === 'PROVIDER_OVERRIDE' && <Badge tone="warn">Plan exception</Badge>} {override && <Badge tone="warn">Pay override</Badge>}</td>
+                        <td>{p.planName || <Badge tone="bad">No plan</Badge>} {override && <Badge tone="warn">Override</Badge>}</td>
                         <td className="nowrap">{leaseSummary(p)}</td>
                         <td><ActiveBadge status={p.status} /></td>
                       </tr>
@@ -203,6 +228,8 @@ export function ProviderProfile() {
   const perTrip = s?.paymentType.value === 'PER_TRIP';
   const uber = s?.calculationType?.value === 'UBER';
   const bandedUber = uber && s?.uberConfig?.value?.rateStructureType === 'HOURLY_BANDS';
+  const missingCompassHours = (p.operators || []).filter((operator) => operator.status === 'ACTIVE'
+    && !operator.transferredTo && operator.source?.system === 'COMPASS' && !operator.contractedHours);
 
   return (
     <div className="page">
@@ -219,12 +246,17 @@ export function ProviderProfile() {
           </Alert>
         </div>
       )}
+      {missingCompassHours.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <Alert tone="warn">Compass has no active assigned run cut for {missingCompassHours.map((operator) => operator.name).join(', ')}. Contracted hours cannot be calculated until the operator is assigned to a run cut in Compass.</Alert>
+        </div>
+      )}
       <div className="grid grid-2">
         <Card title="Profile">
           <div className="kv" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
             <div><div className="k">Provider number</div><div className="v">{p.providerNumber || '—'}</div></div>
             <div><div className="k">Service type</div><div className="v">{p.serviceType || '—'}</div></div>
-            <div><div className="k">VDP plan</div><div className="v">{p.plan ? <Link to={`/plans/${p.plan._id}`}>{p.plan.name}</Link> : <Badge tone="bad">No plan assigned</Badge>} {p.planAssignment?.source === 'DIVISION' && <Badge tone="ok">Division default</Badge>} {p.planAssignment?.source === 'PROVIDER_OVERRIDE' && <Badge tone="warn">Provider exception</Badge>}</div></div>
+            <div><div className="k">VDP plan</div><div className="v">{p.plan ? <Link to={`/plans/${p.plan._id}`}>{p.plan.name}</Link> : <Badge tone="bad">No plan assigned</Badge>}</div></div>
             <div><div className="k">Email</div><div className="v">{p.contact?.email || '—'}</div></div>
             <div><div className="k">Phone</div><div className="v">{p.contact?.phone || '—'}</div></div>
           </div>
@@ -291,6 +323,8 @@ export function ProviderProfile() {
                     : <Badge tone="bad">Required for Uber</Badge>}</td>}
                   <td>{o.contractedHours
                     ? <>{num(o.contractedHours)} / week <span className={`source-tag ${o.source?.system === 'COMPASS' ? 'source-plan' : 'source-override'}`}>{o.source?.system === 'COMPASS' ? 'Compass run cuts' : 'Operator'}</span></>
+                    : o.source?.system === 'COMPASS'
+                      ? <Badge tone="warn">No assigned run cut</Badge>
                     : uber
                       ? <Badge tone="bad">Required for Uber</Badge>
                       : s?.contractedHours.value
@@ -389,7 +423,7 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber
                   </select>
                 </td>
                 {requireBaseRate && <td><input aria-label={`Operator ${i + 1} base hourly rate`} value={o.basePay} onChange={(e) => update(i, { basePay: e.target.value })} placeholder={providerBasePay ? `Provider: ${rate(providerBasePay)}` : 'Optional override'} style={{ width: 110 }} /></td>}
-                <td><input aria-label={`Operator ${i + 1} contracted hours`} value={o.contractedHours} onChange={(e) => update(i, { contractedHours: e.target.value })} placeholder={uber ? 'Required' : planHours ? `Plan: ${num(planHours)}` : 'Plan'} style={{ width: 90 }} disabled={rosterManaged} /></td>
+                <td><input aria-label={`Operator ${i + 1} contracted hours`} value={o.contractedHours} onChange={(e) => update(i, { contractedHours: e.target.value })} placeholder={rosterManaged ? 'No assigned run cut' : uber ? 'Required' : planHours ? `Plan: ${num(planHours)}` : 'Plan'} style={{ width: 140 }} disabled={rosterManaged} /></td>
                 <td>
                   <select aria-label={`Operator ${i + 1} lease frequency`} value={o.liftLease.frequency} onChange={(e) => lease(i, 'frequency', e.target.value)} disabled={leaseManaged}>
                     <option value="WEEKLY">Weekly</option><option value="PER_VDP_CYCLE">Per VDP cycle</option><option value="NONE">No lease</option>
@@ -462,14 +496,7 @@ export function ProviderEdit() {
   const uber = cur?.calculationType === 'UBER';
   const requireUberBaseRate = uber && (cur.uberConfig?.rateStructureType || 'FLAT') === 'FLAT';
   const rosterManaged = form.source?.system === 'COMPASS';
-  const selectedDivision = divisions.data?.find((division) => division._id === form.divisionId);
-  const divisionLeaseManaged = Boolean(selectedDivision?.liftLease?.configured);
-  const divisionDefaultPlan = plans.data?.find((item) => item._id === selectedDivision?.planAssignment?.defaultPlanId);
-  const planAssignmentHelp = divisionDefaultPlan
-    ? (form.planId === divisionDefaultPlan._id
-      ? `${divisionDefaultPlan.name} is the division default. Choosing another plan creates a provider exception.`
-      : `Division default: ${divisionDefaultPlan.name}. This selection will be saved as a provider exception.`)
-    : 'No division default is set. Choose a provider plan here or use Plan Assignments to set one for the whole division.';
+  const divisionLeaseManaged = Boolean(divisions.data?.find((division) => division._id === form.divisionId)?.liftLease?.configured);
 
   if (!id && compass.data?.configured) {
     return <div className="page">
@@ -533,7 +560,7 @@ export function ProviderEdit() {
         <Card title="How they are paid">
           <div className="stack">
             <div className="form-grid">
-              <Field label="VDP plan" htmlFor="f-plan" help={`${planAssignmentHelp}${cur ? ` ${planSummary(cur)}` : ''}`}>
+              <Field label="VDP plan" htmlFor="f-plan" help={cur ? planSummary(cur) : 'The provider inherits every payment rule from this plan.'}>
                 <select id="f-plan" value={form.planId} onChange={set('planId')} disabled={!form.divisionId}>
                   <option value="">No plan</option>
                   {(plans.data || []).filter((p) => p.status === 'ACTIVE' || p._id === form.planId).map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
