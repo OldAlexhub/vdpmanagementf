@@ -38,7 +38,7 @@ export function ProviderList() {
   const [batchPlanId, setBatchPlanId] = useState('');
   const [assigningPlan, setAssigningPlan] = useState(false);
   const divisions = useLoad(() => api.get('/divisions'), []);
-  const divisionPlans = useLoad(() => (divisionId ? api.get('/vdp-plans', { divisionId }) : Promise.resolve([])), [divisionId]);
+  const availablePlans = useLoad(() => api.get('/vdp-plans'), []);
   const compass = useLoad(() => api.get('/compass/status'), []);
   const { data, loading, error, reload } = useLoad(
     () => api.get('/providers', { divisionId, status, search: params.get('search') || '' }),
@@ -70,7 +70,7 @@ export function ProviderList() {
   };
   const assignPlan = async () => {
     const division = divisions.data?.find((item) => item._id === divisionId);
-    const plan = divisionPlans.data?.find((item) => item._id === batchPlanId);
+    const plan = availablePlans.data?.find((item) => item._id === batchPlanId);
     if (!division || !plan || !window.confirm(`Assign ${plan.name} to every provider in DIV ${division.divisionNumber}?`)) return;
     setAssigningPlan(true);
     try {
@@ -106,7 +106,10 @@ export function ProviderList() {
           <div className="actions">
             <select id="pv-batch-plan" value={batchPlanId} onChange={(e) => setBatchPlanId(e.target.value)} disabled={assigningPlan}>
               <option value="">Choose a plan…</option>
-              {(divisionPlans.data || []).filter((plan) => plan.status === 'ACTIVE').map((plan) => <option key={plan._id} value={plan._id}>{plan.name}</option>)}
+              {(availablePlans.data || []).filter((plan) => plan.status === 'ACTIVE').map((plan) => {
+                const owner = divisions.data?.find((division) => division._id === plan.divisionId);
+                return <option key={plan._id} value={plan._id}>{plan.name}{owner ? ` (DIV ${owner.divisionNumber})` : ''}</option>;
+              })}
             </select>
             <button className="btn btn-primary" onClick={assignPlan} disabled={!batchPlanId || assigningPlan}>{assigningPlan ? 'Assigning…' : 'Assign to division'}</button>
           </div>
@@ -462,7 +465,7 @@ export function ProviderEdit() {
   const [busy, setBusy] = useState(false);
   const divisions = useLoad(() => api.get('/divisions'), []);
   const compass = useLoad(() => api.get('/compass/status'), []);
-  const plans = useLoad(() => (form?.divisionId ? api.get('/vdp-plans', { divisionId: form.divisionId }) : Promise.resolve([])), [form?.divisionId]);
+  const plans = useLoad(() => api.get('/vdp-plans'), []);
 
   useEffect(() => {
     if (!id) { setForm(emptyProvider); return; }
@@ -549,7 +552,7 @@ export function ProviderEdit() {
         </Card>
 
         <Card title="Operators" hint={divisionLeaseManaged ? 'Roster and contracted hours come from Compass; lift lease comes from the division Lift Leases tab.' : rosterManaged ? 'Roster and contracted hours come from Compass run cuts; operator pay rates stay in VDP.' : 'The provider is the one who gets paid. Add each operator (driver) who works for them.'}>
-          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={plans.data || []} providerPlanId={form.planId} rosterManaged={rosterManaged} leaseManaged={divisionLeaseManaged} />
+          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={(plans.data || []).filter((item) => item.divisionId === form.divisionId)} providerPlanId={form.planId} rosterManaged={rosterManaged} leaseManaged={divisionLeaseManaged} />
           {form.movedAway?.length > 0 && (
             <p className="muted small" style={{ marginTop: 8 }}>
               Moved to another provider (kept for earlier cycles): {form.movedAway.map((o) => `${o.name} → ${o.transferredTo.providerName} from ${date(o.transferredTo.effectiveDate)}`).join('; ')}.
