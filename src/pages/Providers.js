@@ -361,7 +361,7 @@ const operatorForm = (o) => ({
   transferredFrom: o.transferredFrom || null, // shown only; dates are set by "Move to another provider"
 });
 
-function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber = false, requireBaseRate = false, plans = [], providerPlanId, rosterManaged = false }) {
+function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber = false, requireBaseRate = false, plans = [], providerPlanId, rosterManaged = false, leaseManaged = false }) {
   const planChoices = plans.filter((p) => p._id !== providerPlanId && (p.status === 'ACTIVE' || operators.some((o) => o.planId === p._id)));
   const update = (i, patch) => onChange(operators.map((o, j) => (j === i ? { ...o, ...patch } : o)));
   const lease = (i, k, v) => update(i, { liftLease: { ...operators[i].liftLease, [k]: v } });
@@ -391,11 +391,11 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber
                 {requireBaseRate && <td><input aria-label={`Operator ${i + 1} base hourly rate`} value={o.basePay} onChange={(e) => update(i, { basePay: e.target.value })} placeholder={providerBasePay ? `Provider: ${rate(providerBasePay)}` : 'Optional override'} style={{ width: 110 }} /></td>}
                 <td><input aria-label={`Operator ${i + 1} contracted hours`} value={o.contractedHours} onChange={(e) => update(i, { contractedHours: e.target.value })} placeholder={uber ? 'Required' : planHours ? `Plan: ${num(planHours)}` : 'Plan'} style={{ width: 90 }} /></td>
                 <td>
-                  <select aria-label={`Operator ${i + 1} lease frequency`} value={o.liftLease.frequency} onChange={(e) => lease(i, 'frequency', e.target.value)}>
+                  <select aria-label={`Operator ${i + 1} lease frequency`} value={o.liftLease.frequency} onChange={(e) => lease(i, 'frequency', e.target.value)} disabled={leaseManaged}>
                     <option value="WEEKLY">Weekly</option><option value="PER_VDP_CYCLE">Per VDP cycle</option><option value="NONE">No lease</option>
                   </select>
                 </td>
-                <td>{o.liftLease.frequency !== 'NONE' && <input aria-label={`Operator ${i + 1} lease amount`} value={o.liftLease.amount} onChange={(e) => lease(i, 'amount', e.target.value)} placeholder="197.50" style={{ width: 90 }} />}</td>
+                <td>{o.liftLease.frequency !== 'NONE' && <input aria-label={`Operator ${i + 1} lease amount`} value={o.liftLease.amount} onChange={(e) => lease(i, 'amount', e.target.value)} placeholder="197.50" style={{ width: 90 }} disabled={leaseManaged} />}</td>
                 <td>
                   <select aria-label={`Operator ${i + 1} status`} value={o.status} onChange={(e) => update(i, { status: e.target.value })} disabled={rosterManaged}>
                     <option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option>
@@ -462,6 +462,7 @@ export function ProviderEdit() {
   const uber = cur?.calculationType === 'UBER';
   const requireUberBaseRate = uber && (cur.uberConfig?.rateStructureType || 'FLAT') === 'FLAT';
   const rosterManaged = form.source?.system === 'COMPASS';
+  const divisionLeaseManaged = Boolean(divisions.data?.find((division) => division._id === form.divisionId)?.liftLease?.configured);
 
   if (!id && compass.data?.configured) {
     return <div className="page">
@@ -513,8 +514,8 @@ export function ProviderEdit() {
           </div>
         </Card>
 
-        <Card title="Operators" hint={rosterManaged ? 'Roster fields come from Compass; operator payment settings stay in VDP.' : 'The provider is the one who gets paid. Add each operator (driver) who works for them.'}>
-          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={plans.data || []} providerPlanId={form.planId} rosterManaged={rosterManaged} />
+        <Card title="Operators" hint={divisionLeaseManaged ? 'Roster fields come from Compass; lift lease comes from the division Lift Leases tab.' : rosterManaged ? 'Roster fields come from Compass; operator payment settings stay in VDP.' : 'The provider is the one who gets paid. Add each operator (driver) who works for them.'}>
+          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={plans.data || []} providerPlanId={form.planId} rosterManaged={rosterManaged} leaseManaged={divisionLeaseManaged} />
           {form.movedAway?.length > 0 && (
             <p className="muted small" style={{ marginTop: 8 }}>
               Moved to another provider (kept for earlier cycles): {form.movedAway.map((o) => `${o.name} → ${o.transferredTo.providerName} from ${date(o.transferredTo.effectiveDate)}`).join('; ')}.

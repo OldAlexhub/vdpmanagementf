@@ -29,7 +29,7 @@ export default function Dashboard() {
   return (
     <div className="page">
       <PageHead title="Dashboard"
-        sub={s ? <>DIV {s.division.divisionNumber} – {s.division.name} · {cycleLabel(s.cycle)} · payment {date(s.cycle.paymentDate, 'long')} <StatusBadge status={s.cycle.status} map={CYCLE_STATUS} /></> : 'Current VDP cycle at a glance.'} />
+        sub={s ? <>DIV {s.division?.divisionNumber || '—'}{s.division?.name ? ` – ${s.division.name}` : ''} · {cycleLabel(s.cycle)} · payment {date(s.cycle.paymentDate, 'long')} <StatusBadge status={s.cycle.status} map={CYCLE_STATUS} /></> : 'Current VDP cycle at a glance.'} />
       <div className="filters" style={{ marginBottom: 16 }}>
         <DivisionCyclePicker sel={sel} />
         <div className="field">

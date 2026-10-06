@@ -12,6 +12,7 @@ import { PlanList, PlanDetail } from './pages/Plans';
 import Cycles from './pages/Cycles';
 import Settings from './pages/Settings';
 import Reports from './pages/Reports';
+import LiftLeases from './pages/LiftLeases';
 import PortalShell from './pages/Portal';
 
 const AuthContext = createContext(null);
@@ -22,6 +23,7 @@ const NAV = [
   ['/processing', 'VDP Processing', '▶'],
   ['/reports', 'Reports', '▥'],
   ['/providers', 'Providers', '◉'],
+  ['/lift-leases', 'Lift Leases', '$'],
   ['/divisions', 'Divisions', '▦'],
   ['/plans', 'VDP Plans', '$'],
   ['/cycles', 'Cycles', '◷'],
@@ -59,6 +61,7 @@ function Shell({ user, onLogout }) {
           <Route path="/providers/new" element={<ProviderEdit />} />
           <Route path="/providers/:id" element={<ProviderProfile />} />
           <Route path="/providers/:id/edit" element={<ProviderEdit />} />
+          <Route path="/lift-leases" element={<LiftLeases />} />
           <Route path="/divisions" element={<Divisions />} />
           <Route path="/plans" element={<PlanList />} />
           <Route path="/plans/:id" element={<PlanDetail />} />

@@ -400,7 +400,7 @@ export default function Processing() {
   return (
     <div className="page">
       <PageHead title="VDP Processing"
-        sub={summary ? <>DIV {summary.division.divisionNumber} – {summary.division.name} · {cycleLabel(summary.cycle)} · payment {date(summary.cycle.paymentDate)} <StatusBadge status={summary.cycle.status} map={CYCLE_STATUS} /></> : 'Choose a division and cycle.'}
+        sub={summary ? <>DIV {summary.division?.divisionNumber || '—'}{summary.division?.name ? ` – ${summary.division.name}` : ''} · {cycleLabel(summary.cycle)} · payment {date(summary.cycle.paymentDate)} <StatusBadge status={summary.cycle.status} map={CYCLE_STATUS} /></> : 'Choose a division and cycle.'}
         actions={summary && v.total > 0 && (
           <>
             <button className="btn" onClick={() => downloadFile(`/exports/cycles/${summary.cycle._id}.pdf`).catch((e) => toast(e.message, 'bad'))}>Payment register (PDF)</button>
