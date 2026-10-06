@@ -179,6 +179,11 @@ textarea { resize: vertical; min-height: 64px; }
 .alert-info { background: var(--info-soft); border-color: #cdd3f5; color: #28357d; }
 .alert .grow { flex: 1; }
 .alert + .alert { margin-top: 8px; }
+.source-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.source-summary > div { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--surface-2); }
+.source-summary strong { display: block; font-size: 22px; }
+.source-summary span { color: var(--text-3); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+@media (max-width: 600px) { .source-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .empty { text-align: center; padding: 40px 20px; color: var(--text-3); }
 .empty h3 { color: var(--text); margin-bottom: 6px; }

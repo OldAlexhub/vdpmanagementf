@@ -3,11 +3,12 @@ import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../App';
 import BulkImport from '../components/BulkImport';
-import { ActiveBadge, Card, Confirm, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
+import { ActiveBadge, Alert, Badge, Card, Confirm, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
 
 const TIMEZONES = ['America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York', 'America/Detroit', 'America/Phoenix'];
 
 function DivisionForm({ division, onClose, onSaved }) {
+  const compassManaged = division?.source?.system === 'COMPASS';
   const [form, setForm] = useState({
     divisionNumber: division?.divisionNumber || '',
     name: division?.name || '',
@@ -39,15 +40,16 @@ function DivisionForm({ division, onClose, onSaved }) {
     >
       <div className="stack">
         <div className="form-grid">
-          <Field label="Division number" htmlFor="d-num"><input id="d-num" value={form.divisionNumber} onChange={set('divisionNumber')} placeholder="10" /></Field>
-          <Field label="Name" htmlFor="d-name"><input id="d-name" value={form.name} onChange={set('name')} placeholder="Portland" /></Field>
+          <Field label="Division number" htmlFor="d-num"><input id="d-num" value={form.divisionNumber} onChange={set('divisionNumber')} placeholder="10" disabled={compassManaged} /></Field>
+          <Field label="Name" htmlFor="d-name"><input id="d-name" value={form.name} onChange={set('name')} placeholder="Portland" disabled={compassManaged} /></Field>
           <Field label="Location" htmlFor="d-loc"><input id="d-loc" value={form.location} onChange={set('location')} placeholder="Portland, OR" /></Field>
           <Field label="Time zone" htmlFor="d-tz">
-            <select id="d-tz" value={form.timezone} onChange={set('timezone')}>
+            <select id="d-tz" value={form.timezone} onChange={set('timezone')} disabled={compassManaged}>
               {TIMEZONES.map((t) => <option key={t}>{t}</option>)}
             </select>
           </Field>
         </div>
+        {compassManaged && <Alert tone="info">Division number, name, time zone, and status come from Compass. Location and notes stay editable in VDP.</Alert>}
         <p className="muted small">
           VDP cycles are company-wide (see <Link to="/cycles">Cycles</Link>). {division ? '' : 'A new division joins the current and upcoming cycles automatically.'}
         </p>
@@ -63,23 +65,39 @@ export default function Divisions() {
   const isAdmin = user.role === 'ADMIN';
   const toast = useToast();
   const { data, loading, error, reload } = useLoad(() => api.get('/divisions'), []);
+  const compass = useLoad(() => api.get('/compass/status'), []);
   const [editing, setEditing] = useState(null);
   const [toggling, setToggling] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const compassManaged = Boolean(compass.data?.configured);
+  const sync = async () => {
+    setSyncing(true);
+    try {
+      await api.post('/compass/sync');
+      toast('Compass roster refreshed');
+      reload();
+      compass.reload();
+    } catch (e) { toast(e.message, 'bad'); }
+    setSyncing(false);
+  };
 
   return (
     <div className="page">
       <PageHead
         title="Divisions"
-        sub="Each division has its own providers, VDP plans and cycle schedule."
-        actions={isAdmin && <><button className="btn" onClick={() => setImporting(true)}>Bulk import</button><button className="btn btn-primary" onClick={() => setEditing({})}>New division</button></>}
+        sub={compassManaged ? 'Division roster comes from Compass; VDP plans and payment history remain in MongoDB.' : 'Each division has its own providers, VDP plans and cycle schedule.'}
+        actions={isAdmin && (compassManaged
+          ? <button className="btn btn-primary" onClick={sync} disabled={syncing}>{syncing ? 'Refreshing…' : 'Refresh from Compass'}</button>
+          : <><button className="btn" onClick={() => setImporting(true)}>Bulk import</button><button className="btn btn-primary" onClick={() => setEditing({})}>New division</button></>)}
       />
+      {compassManaged && <div style={{ marginBottom: 16 }}><Alert tone="info">Compass controls division creation, names, time zones, and active status. MongoDB-only divisions such as DIV 12 remain unchanged when Compass does not return them.</Alert></div>}
       <ErrorAlert error={error} />
       {loading ? <Loading /> : data && (
         <Card body={false}>
           {data.length === 0 ? (
-            <Empty title="No divisions yet" actions={isAdmin && <button className="btn btn-primary" onClick={() => setEditing({})}>Create the first division</button>}>
-              Create a division to start adding providers and VDP plans.
+            <Empty title="No divisions yet" actions={isAdmin && !compassManaged && <button className="btn btn-primary" onClick={() => setEditing({})}>Create the first division</button>}>
+              {compassManaged ? 'Refresh from Compass to load the roster.' : 'Create a division to start adding providers and VDP plans.'}
             </Empty>
           ) : (
             <div className="table-wrap">
@@ -90,7 +108,7 @@ export default function Divisions() {
                 <tbody>
                   {data.map((d) => (
                     <tr key={d._id}>
-                      <td><div className="strong">DIV {d.divisionNumber} – {d.name}</div>{d.notes && <div className="muted small">{d.notes}</div>}</td>
+                      <td><div className="strong">DIV {d.divisionNumber} – {d.name} {d.source?.system === 'COMPASS' && <Badge tone="accent">Compass</Badge>}</div>{d.notes && <div className="muted small">{d.notes}</div>}</td>
                       <td>{d.location || '—'}</td>
                       <td className="small">{d.timezone}</td>
                       <td className="num"><Link to={`/providers?divisionId=${d._id}`}>{d.activeProviders}</Link></td>
@@ -100,9 +118,9 @@ export default function Divisions() {
                         {isAdmin && (
                           <div className="actions" style={{ justifyContent: 'flex-end' }}>
                             <button className="btn btn-sm" onClick={() => setEditing(d)}>Edit</button>
-                            <button className={`btn btn-sm ${d.status === 'ACTIVE' ? 'btn-danger' : ''}`} onClick={() => setToggling(d)}>
+                            {d.source?.system !== 'COMPASS' && <button className={`btn btn-sm ${d.status === 'ACTIVE' ? 'btn-danger' : ''}`} onClick={() => setToggling(d)}>
                               {d.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}
-                            </button>
+                            </button>}
                           </div>
                         )}
                       </td>

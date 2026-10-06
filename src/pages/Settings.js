@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../App';
 import { Badge, Card, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
+import CompassSettingsCard from '../components/CompassRoster';
 
 export function PasswordCard() {
   const toast = useToast();
@@ -114,7 +115,7 @@ export default function Settings() {
           <PasswordCard />
           <RulesCard />
         </div>
-        {user.role === 'ADMIN' && <UsersCard />}
+        {user.role === 'ADMIN' && <div className="stack"><CompassSettingsCard /><UsersCard /></div>}
       </div>
     </div>
   );

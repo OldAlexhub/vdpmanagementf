@@ -6,6 +6,7 @@ import { ActiveBadge, Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, Mod
 import { TierTable, planSummary, fuelMethodOf } from './Plans';
 import PortalAccess from '../components/PortalAccess';
 import BulkImport from '../components/BulkImport';
+import { useAuth } from '../App';
 
 const leaseText = (l) => (!l || l.frequency === 'NONE' || !l.amount ? 'None' : `${money(l.amount)} / ${LEASE_LABELS[l.frequency]}`);
 
@@ -25,12 +26,17 @@ function leaseSummary(p) {
 
 export function ProviderList() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user.role === 'ADMIN';
+  const toast = useToast();
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState(params.get('search') || '');
   const divisionId = params.get('divisionId') || '';
   const status = params.get('status') ?? 'ACTIVE';
   const [importing, setImporting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const divisions = useLoad(() => api.get('/divisions'), []);
+  const compass = useLoad(() => api.get('/compass/status'), []);
   const { data, loading, error, reload } = useLoad(
     () => api.get('/providers', { divisionId, status, search: params.get('search') || '' }),
     [divisionId, status, params.get('search')],
@@ -45,12 +51,28 @@ export function ProviderList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
   const setParam = (k, v) => { const next = Object.fromEntries(params); if (v === '' && k !== 'status') delete next[k]; else next[k] = v; setParams(next); };
+  const compassManaged = Boolean(compass.data?.configured);
+  const sync = async () => {
+    setSyncing(true);
+    try {
+      await api.post('/compass/sync');
+      reload();
+      divisions.reload();
+      compass.reload();
+      toast('Compass roster refreshed');
+    } catch (error) {
+      toast(error.message, 'bad');
+    } finally { setSyncing(false); }
+  };
 
   return (
     <div className="page">
-      <PageHead title="Providers" sub="Who they are, which route they run, and how they are paid."
-        actions={<><button className="btn" onClick={() => setImporting(true)}>Bulk import</button><button className="btn btn-primary" onClick={() => navigate('/providers/new')}>New provider</button></>} />
+      <PageHead title="Providers" sub={compassManaged ? 'Provider, operator, route, and vehicle roster comes from Compass.' : 'Who they are, which route they run, and how they are paid.'}
+        actions={isAdmin && (compassManaged
+          ? <button className="btn btn-primary" onClick={sync} disabled={syncing}>{syncing ? 'Refreshing…' : 'Refresh from Compass'}</button>
+          : <><button className="btn" onClick={() => setImporting(true)}>Bulk import</button><button className="btn btn-primary" onClick={() => navigate('/providers/new')}>New provider</button></>)} />
       {importing && <BulkImport kind="providers" title="Providers" onClose={() => setImporting(false)} onDone={reload} />}
+      {compassManaged && <div style={{ marginBottom: 16 }}><Alert tone="info">Compass controls roster fields. VDP plans, pay overrides, lift leases, contact details, and notes stay editable here.</Alert></div>}
       <div className="filters" style={{ marginBottom: 16 }}>
         <Field label="Search" htmlFor="pv-search"><input id="pv-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Name, operator, route, number" /></Field>
         <Field label="Division" htmlFor="pv-div">
@@ -69,8 +91,8 @@ export function ProviderList() {
       {loading ? <Loading /> : data && (
         <Card body={false}>
           {data.length === 0 ? (
-            <Empty title="No providers found" actions={<button className="btn btn-primary" onClick={() => navigate('/providers/new')}>Add a provider</button>}>
-              Try a different search or add a provider.
+            <Empty title="No providers found" actions={isAdmin && !compassManaged && <button className="btn btn-primary" onClick={() => navigate('/providers/new')}>Add a provider</button>}>
+              {compassManaged ? 'Try a different search or refresh the Compass roster.' : 'Try a different search or add a provider.'}
             </Empty>
           ) : (
             <div className="table-wrap">
@@ -81,7 +103,7 @@ export function ProviderList() {
                     const override = p.overrides && (p.overrides.tuiEligibility !== 'INHERIT' || p.overrides.contractedHours || p.overrides.basePay || p.overrides.bonusRate);
                     return (
                       <tr key={p._id} className="clickable" onClick={() => navigate(`/providers/${p._id}`)}>
-                        <td><div className="strong">{p.name}</div><div className="muted small">#{p.providerNumber || '—'}</div></td>
+                        <td><div className="strong">{p.name} {p.source?.system === 'COMPASS' && <Badge tone="accent">Compass</Badge>}</div><div className="muted small">#{p.providerNumber || '—'}</div></td>
                         <td>{p.division ? `DIV ${p.division.divisionNumber}` : '—'}</td>
                         <td>{p.operatorName || '—'}{p.operators?.filter((o) => o.status === 'ACTIVE' && !o.transferredTo).length > 1 && <div className="muted small">{p.operators.filter((o) => o.status === 'ACTIVE' && !o.transferredTo).length} operators</div>}</td>
                         <td className="mono">{p.routes.join(', ') || <span className="muted">—</span>}</td>
@@ -186,7 +208,7 @@ export function ProviderProfile() {
     <div className="page">
       <PageHead
         crumbs={<Link to="/providers">Providers</Link>}
-        title={<>{p.name} <ActiveBadge status={p.status} /></>}
+        title={<>{p.name} <ActiveBadge status={p.status} /> {p.source?.system === 'COMPASS' && <Badge tone="accent">Compass</Badge>}</>}
         sub={division.data ? `DIV ${division.data.divisionNumber} – ${division.data.name}` : ''}
         actions={<button className="btn btn-primary" onClick={() => navigate(`/providers/${id}/edit`)}>Edit provider</button>}
       />
@@ -277,7 +299,7 @@ export function ProviderProfile() {
                   <td className="nowrap">{leaseText(o.liftLease)}</td>
                   <td>{o.transferredTo ? <Badge>Moved</Badge> : <ActiveBadge status={o.status} />}</td>
                   <td className="num">
-                    {o.status === 'ACTIVE' && !o.transferredTo && (
+                    {p.source?.system !== 'COMPASS' && o.status === 'ACTIVE' && !o.transferredTo && (
                       <button className="btn btn-ghost btn-sm" onClick={() => setMoving(o)}>Move to another provider</button>
                     )}
                   </td>
@@ -335,10 +357,11 @@ const operatorForm = (o) => ({
   contractedHours: o.contractedHours || '',
   planId: o.planId || '',
   liftLease: { amount: o.liftLease?.amount || '', frequency: o.liftLease?.frequency || 'NONE' },
+  employeeId: o.employeeId || '',
   transferredFrom: o.transferredFrom || null, // shown only; dates are set by "Move to another provider"
 });
 
-function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber = false, requireBaseRate = false, plans = [], providerPlanId }) {
+function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber = false, requireBaseRate = false, plans = [], providerPlanId, rosterManaged = false }) {
   const planChoices = plans.filter((p) => p._id !== providerPlanId && (p.status === 'ACTIVE' || operators.some((o) => o.planId === p._id)));
   const update = (i, patch) => onChange(operators.map((o, j) => (j === i ? { ...o, ...patch } : o)));
   const lease = (i, k, v) => update(i, { liftLease: { ...operators[i].liftLease, [k]: v } });
@@ -353,11 +376,12 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber
             {operators.map((o, i) => (
               <tr key={i}>
                 <td>
-                  <input aria-label={`Operator ${i + 1} name`} value={o.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="Lisa Moore" />
+                  <input aria-label={`Operator ${i + 1} name`} value={o.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="Lisa Moore" disabled={rosterManaged} />
+                  {rosterManaged && o.employeeId && <div className="muted small">Employee #{o.employeeId}</div>}
                   {o.transferredFrom && <div className="muted small">From {date(o.transferredFrom.effectiveDate)} (moved from {o.transferredFrom.providerName})</div>}
                 </td>
-                <td><input aria-label={`Operator ${i + 1} vehicle or pay unit`} value={o.vehicleUnit} onChange={(e) => update(i, { vehicleUnit: e.target.value })} placeholder="e.g. 4548" style={{ width: 100 }} /></td>
-                <td><input aria-label={`Operator ${i + 1} routes`} value={o.routes} onChange={(e) => update(i, { routes: e.target.value })} placeholder="918" style={{ width: 90 }} /></td>
+                <td><input aria-label={`Operator ${i + 1} vehicle or pay unit`} value={o.vehicleUnit} onChange={(e) => update(i, { vehicleUnit: e.target.value })} placeholder="e.g. 4548" style={{ width: 100 }} disabled={rosterManaged} /></td>
+                <td><input aria-label={`Operator ${i + 1} routes`} value={o.routes} onChange={(e) => update(i, { routes: e.target.value })} placeholder="918" style={{ width: 90 }} disabled={rosterManaged} /></td>
                 <td>
                   <select aria-label={`Operator ${i + 1} VDP plan`} value={o.planId} onChange={(e) => update(i, { planId: e.target.value })}>
                     <option value="">Provider’s plan</option>
@@ -373,17 +397,17 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber
                 </td>
                 <td>{o.liftLease.frequency !== 'NONE' && <input aria-label={`Operator ${i + 1} lease amount`} value={o.liftLease.amount} onChange={(e) => lease(i, 'amount', e.target.value)} placeholder="197.50" style={{ width: 90 }} />}</td>
                 <td>
-                  <select aria-label={`Operator ${i + 1} status`} value={o.status} onChange={(e) => update(i, { status: e.target.value })}>
+                  <select aria-label={`Operator ${i + 1} status`} value={o.status} onChange={(e) => update(i, { status: e.target.value })} disabled={rosterManaged}>
                     <option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option>
                   </select>
                 </td>
-                <td className="num">{operators.length > 1 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(operators.filter((_, j) => j !== i))}>Remove</button>}</td>
+                <td className="num">{!rosterManaged && operators.length > 1 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(operators.filter((_, j) => j !== i))}>Remove</button>}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <div className="actions"><button type="button" className="btn btn-sm" onClick={() => onChange([...operators, blankOperator()])}>Add operator</button></div>
+      {!rosterManaged && <div className="actions"><button type="button" className="btn btn-sm" onClick={() => onChange([...operators, blankOperator()])}>Add operator</button></div>}
       <p className="help muted small">
         Routes as shown in the Performance Report “Run/Route” column; separate several with commas. A route belongs to one operator.
         {uber ? `${requireBaseRate ? 'This flat-rate Uber plan uses the provider base hourly rate unless an operator-specific rate is entered. ' : 'This Uber plan gets its hourly rates from plan bands. '}Contracted hours stay on each operator profile. Give operators the same Vehicle / pay unit when they share one vehicle contract. Their weekly data is combined for eligibility and the vehicle lease is charged once. ` : ''}
@@ -403,6 +427,7 @@ export function ProviderEdit() {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const divisions = useLoad(() => api.get('/divisions'), []);
+  const compass = useLoad(() => api.get('/compass/status'), []);
   const plans = useLoad(() => (form?.divisionId ? api.get('/vdp-plans', { divisionId: form.divisionId }) : Promise.resolve([])), [form?.divisionId]);
 
   useEffect(() => {
@@ -436,6 +461,14 @@ export function ProviderEdit() {
   const cur = plan?.versions.find((v) => v._id === plan.currentVersionId);
   const uber = cur?.calculationType === 'UBER';
   const requireUberBaseRate = uber && (cur.uberConfig?.rateStructureType || 'FLAT') === 'FLAT';
+  const rosterManaged = form.source?.system === 'COMPASS';
+
+  if (!id && compass.data?.configured) {
+    return <div className="page">
+      <PageHead crumbs={<Link to="/providers">Providers</Link>} title="Providers are managed by Compass" />
+      <Alert tone="info">Add the provider in Compass, then use Refresh from Compass on the Providers page.</Alert>
+    </div>;
+  }
 
   const save = async () => {
     setBusy(true);
@@ -462,25 +495,26 @@ export function ProviderEdit() {
         actions={<><button className="btn" onClick={() => navigate(-1)}>Cancel</button><button className="btn btn-primary" disabled={busy} onClick={save}>Save provider</button></>} />
       <div className="stack">
         <ErrorAlert error={error} />
+        {rosterManaged && <Alert tone="info">Compass controls the provider name, division, status, operators, routes, and vehicles. Payment settings, leases, contact details, and notes remain editable here.</Alert>}
         <Card title="Provider">
           <div className="form-grid">
-            <Field label="Provider name" htmlFor="f-name"><input id="f-name" value={form.name} onChange={set('name')} placeholder="Rimo Transit LLC" /></Field>
+            <Field label="Provider name" htmlFor="f-name"><input id="f-name" value={form.name} onChange={set('name')} placeholder="Rimo Transit LLC" disabled={rosterManaged} /></Field>
             <Field label="Provider number" htmlFor="f-num"><input id="f-num" value={form.providerNumber || ''} onChange={set('providerNumber')} /></Field>
             <Field label="Division" htmlFor="f-div">
-              <select id="f-div" value={form.divisionId} onChange={(e) => setForm({ ...form, divisionId: e.target.value, planId: '' })}>
+              <select id="f-div" value={form.divisionId} onChange={(e) => setForm({ ...form, divisionId: e.target.value, planId: '' })} disabled={rosterManaged}>
                 <option value="">Choose…</option>
                 {(divisions.data || []).map((d) => <option key={d._id} value={d._id}>DIV {d.divisionNumber} – {d.name}</option>)}
               </select>
             </Field>
             <Field label="Status" htmlFor="f-status">
-              <select id="f-status" value={form.status} onChange={set('status')}><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select>
+              <select id="f-status" value={form.status} onChange={set('status')} disabled={rosterManaged}><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select>
             </Field>
             <Field label="Service type" htmlFor="f-svc"><input id="f-svc" value={form.serviceType || ''} onChange={set('serviceType')} placeholder="TDEV Night" /></Field>
           </div>
         </Card>
 
-        <Card title="Operators" hint="The provider is the one who gets paid. Add each operator (driver) who works for them.">
-          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={plans.data || []} providerPlanId={form.planId} />
+        <Card title="Operators" hint={rosterManaged ? 'Roster fields come from Compass; operator payment settings stay in VDP.' : 'The provider is the one who gets paid. Add each operator (driver) who works for them.'}>
+          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={plans.data || []} providerPlanId={form.planId} rosterManaged={rosterManaged} />
           {form.movedAway?.length > 0 && (
             <p className="muted small" style={{ marginTop: 8 }}>
               Moved to another provider (kept for earlier cycles): {form.movedAway.map((o) => `${o.name} → ${o.transferredTo.providerName} from ${date(o.transferredTo.effectiveDate)}`).join('; ')}.
