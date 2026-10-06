@@ -28,6 +28,7 @@ function CompassPreview({ onClose }) {
             <div><strong>{preview.summary.providerDivisionRecords}</strong><span>Provider/division records</span></div>
             <div><strong>{preview.summary.compassOperators}</strong><span>Operators</span></div>
             <div><strong>{preview.summary.operatorsWithRoutes}</strong><span>With active routes</span></div>
+            <div><strong>{preview.summary.operatorsWithContractedHours}</strong><span>With weekly hours</span></div>
           </div>
           {preview.warnings.map((warning) => <Alert tone="warn" key={warning}>{warning}</Alert>)}
           <div className="table-wrap">
