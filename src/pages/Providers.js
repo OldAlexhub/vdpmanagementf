@@ -82,12 +82,12 @@ export function ProviderList() {
   };
   const unassignPlans = async () => {
     const division = divisions.data?.find((item) => item._id === divisionId);
-    if (!division || !window.confirm(`Unassign the VDP plan from every provider in DIV ${division.divisionNumber}? They will need review until another plan is assigned.`)) return;
+    if (!division || !window.confirm(`Unassign all provider and operator VDP plans in DIV ${division.divisionNumber}?`)) return;
     setAssigningPlan(true);
     try {
       const result = await api.put(`/providers/division/${divisionId}/plan`, { planId: null });
       setBatchPlanId('');
-      toast(`VDP plans unassigned from ${result.applied.providers} providers`);
+      toast(`All VDP plans unassigned from ${result.applied.providers} providers`);
       reload();
     } catch (error) { toast(error.message, 'bad'); }
     setAssigningPlan(false);
