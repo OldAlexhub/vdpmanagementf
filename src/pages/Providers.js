@@ -398,8 +398,10 @@ const operatorForm = (o) => ({
   transferredFrom: o.transferredFrom || null, // shown only; dates are set by "Move to another provider"
 });
 
-function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber = false, requireBaseRate = false, plans = [], providerPlanId, rosterManaged = false, leaseManaged = false }) {
+function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber = false, requireBaseRate = false, plans = [], plansLoading = false, providerPlanId, rosterManaged = false, leaseManaged = false }) {
+  const providerPlan = plans.find((p) => p._id === providerPlanId);
   const planChoices = plans.filter((p) => p._id !== providerPlanId && (p.status === 'ACTIVE' || operators.some((o) => o.planId === p._id)));
+  const inheritedPlanLabel = providerPlan ? `Provider's plan — ${providerPlan.name}` : 'Provider has no default plan';
   const update = (i, patch) => onChange(operators.map((o, j) => (j === i ? { ...o, ...patch } : o)));
   const lease = (i, k, v) => update(i, { liftLease: { ...operators[i].liftLease, [k]: v } });
   return (
@@ -421,8 +423,9 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber
                 <td><input aria-label={`Operator ${i + 1} routes`} value={o.routes} onChange={(e) => update(i, { routes: e.target.value })} placeholder="918" style={{ width: 90 }} disabled={rosterManaged} /></td>
                 <td>
                   <select aria-label={`Operator ${i + 1} VDP plan`} value={o.planId} onChange={(e) => update(i, { planId: e.target.value })}>
-                    <option value="">Provider’s plan</option>
+                    <option value="">{inheritedPlanLabel}</option>
                     {planChoices.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
+                    {!plansLoading && planChoices.length === 0 && <option disabled>No other active VDP plans in this division</option>}
                   </select>
                 </td>
                 {requireBaseRate && <td><input aria-label={`Operator ${i + 1} base hourly rate`} value={o.basePay} onChange={(e) => update(i, { basePay: e.target.value })} placeholder={providerBasePay ? `Provider: ${rate(providerBasePay)}` : 'Optional override'} style={{ width: 110 }} /></td>}
@@ -449,7 +452,7 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber
         Routes as shown in the Performance Report “Run/Route” column; separate several with commas. A route belongs to one operator.
         {uber ? `${requireBaseRate ? 'This flat-rate Uber plan uses the provider base hourly rate unless an operator-specific rate is entered. ' : 'This Uber plan gets its hourly rates from plan bands. '}Contracted hours stay on each operator profile. Give operators the same Vehicle / pay unit when they share one vehicle contract. Their weekly data is combined for eligibility and the vehicle lease is charged once. ` : ''}
         Operators without a shared vehicle are measured against their own contracted hours{uber ? '' : ' (blank = plan)'}, and each distinct vehicle lease is charged once.
-        An operator on a different VDP plan is paid entirely under that plan (rates, TUI, hours column, fuel); the provider’s overrides stay with the provider’s plan.
+        Only plans from this provider’s division are available. An operator on a different VDP plan is paid entirely under that plan (rates, TUI, hours column, fuel); the provider’s overrides stay with the provider’s plan.
         The provider receives one VDP with the total.
       </p>
     </div>
@@ -465,7 +468,10 @@ export function ProviderEdit() {
   const [busy, setBusy] = useState(false);
   const divisions = useLoad(() => api.get('/divisions'), []);
   const compass = useLoad(() => api.get('/compass/status'), []);
-  const plans = useLoad(() => api.get('/vdp-plans'), []);
+  const plans = useLoad(
+    () => (form?.divisionId ? api.get('/vdp-plans', { divisionId: form.divisionId }) : Promise.resolve([])),
+    [form?.divisionId],
+  );
 
   useEffect(() => {
     if (!id) { setForm(emptyProvider); return; }
@@ -533,6 +539,7 @@ export function ProviderEdit() {
         actions={<><button className="btn" onClick={() => navigate(-1)}>Cancel</button><button className="btn btn-primary" disabled={busy} onClick={save}>Save provider</button></>} />
       <div className="stack">
         <ErrorAlert error={error} />
+        <ErrorAlert error={plans.error} />
         {rosterManaged && <Alert tone="info">Compass controls the provider name, division, status, operators, routes, vehicles, and weekly contracted hours calculated from active run-cut service hours. Payment settings, leases, contact details, and notes remain editable here.</Alert>}
         <Card title="Provider">
           <div className="form-grid">
@@ -552,7 +559,7 @@ export function ProviderEdit() {
         </Card>
 
         <Card title="Operators" hint={divisionLeaseManaged ? 'Roster and contracted hours come from Compass; lift lease comes from the division Lift Leases tab.' : rosterManaged ? 'Roster and contracted hours come from Compass run cuts; operator pay rates stay in VDP.' : 'The provider is the one who gets paid. Add each operator (driver) who works for them.'}>
-          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={(plans.data || []).filter((item) => item.divisionId === form.divisionId)} providerPlanId={form.planId} rosterManaged={rosterManaged} leaseManaged={divisionLeaseManaged} />
+          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={plans.data || []} plansLoading={plans.loading} providerPlanId={form.planId} rosterManaged={rosterManaged} leaseManaged={divisionLeaseManaged} />
           {form.movedAway?.length > 0 && (
             <p className="muted small" style={{ marginTop: 8 }}>
               Moved to another provider (kept for earlier cycles): {form.movedAway.map((o) => `${o.name} → ${o.transferredTo.providerName} from ${date(o.transferredTo.effectiveDate)}`).join('; ')}.
