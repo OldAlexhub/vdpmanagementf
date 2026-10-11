@@ -553,9 +553,12 @@ export function PlanDetail() {
   const isAdmin = user.role === 'ADMIN';
   const toast = useToast();
   const { data: plan, loading, error, reload, setData } = useLoad(() => api.get(`/vdp-plans/${id}`), [id]);
+  const divisions = useLoad(() => api.get('/divisions'), []);
   const providers = useLoad(() => api.get('/providers', { planId: id }), [id]);
   const [modal, setModal] = useState(null);
   const [editMeta, setEditMeta] = useState(null);
+  const [editError, setEditError] = useState(null);
+  const [editBusy, setEditBusy] = useState(false);
   const [pricing, setPricing] = useState(false);
   const [downloadingReport, setDownloadingReport] = useState(false);
 
@@ -578,7 +581,7 @@ export function PlanDetail() {
         actions={(
           <>
             <button className="btn" disabled={downloadingReport} onClick={downloadPlanReport}>{downloadingReport ? 'Preparing PDF...' : 'Executive PDF'}</button>
-            {isAdmin && <button className="btn" onClick={() => setEditMeta({ name: plan.name, notes: plan.notes || '', status: plan.status })}>Edit plan</button>}
+            {isAdmin && <button className="btn" onClick={() => { setEditError(null); setEditMeta({ name: plan.name, divisionId: plan.divisionId, notes: plan.notes || '', status: plan.status }); }}>Edit plan</button>}
             {isAdmin && <button className="btn btn-primary" onClick={() => setModal({ mode: 'add', version: current })}>New version (rate change)</button>}
           </>
         )}
@@ -650,15 +653,35 @@ export function PlanDetail() {
       {editMeta && (
         <Modal title="Edit plan" onClose={() => setEditMeta(null)}
           footer={<><button className="btn" onClick={() => setEditMeta(null)}>Cancel</button>
-            <button className="btn btn-primary" onClick={async () => { await api.put(`/vdp-plans/${plan._id}`, editMeta); setEditMeta(null); reload(); toast('Plan saved'); }}>Save</button></>}>
+            <button className="btn btn-primary" disabled={editBusy || !editMeta.divisionId} onClick={async () => {
+              setEditBusy(true);
+              setEditError(null);
+              try {
+                await api.put(`/vdp-plans/${plan._id}`, editMeta);
+                setEditMeta(null);
+                reload();
+                toast('Plan saved');
+              } catch (e) {
+                setEditError(e);
+              } finally {
+                setEditBusy(false);
+              }
+            }}>{editBusy ? 'Saving…' : 'Save'}</button></>}>
           <div className="stack">
             <Field label="Name" htmlFor="pm-name"><input id="pm-name" value={editMeta.name} onChange={(e) => setEditMeta({ ...editMeta, name: e.target.value })} /></Field>
+            <Field label="Division" htmlFor="pm-division" help="Divisions synchronized from Compass appear here.">
+              <select id="pm-division" value={editMeta.divisionId} onChange={(e) => setEditMeta({ ...editMeta, divisionId: e.target.value })} disabled={divisions.loading}>
+                <option value="">Choose…</option>
+                {(divisions.data || []).map((division) => <option key={division._id} value={division._id}>DIV {division.divisionNumber} – {division.name}</option>)}
+              </select>
+            </Field>
             <Field label="Status" htmlFor="pm-status">
               <select id="pm-status" value={editMeta.status} onChange={(e) => setEditMeta({ ...editMeta, status: e.target.value })}>
                 <option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option>
               </select>
             </Field>
             <Field label="Notes" htmlFor="pm-notes"><textarea id="pm-notes" value={editMeta.notes} onChange={(e) => setEditMeta({ ...editMeta, notes: e.target.value })} /></Field>
+            <ErrorAlert error={divisions.error || editError} />
           </div>
         </Modal>
       )}
