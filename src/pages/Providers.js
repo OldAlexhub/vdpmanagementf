@@ -80,6 +80,18 @@ export function ProviderList() {
     } catch (error) { toast(error.message, 'bad'); }
     setAssigningPlan(false);
   };
+  const unassignPlans = async () => {
+    const division = divisions.data?.find((item) => item._id === divisionId);
+    if (!division || !window.confirm(`Unassign the VDP plan from every provider in DIV ${division.divisionNumber}? They will need review until another plan is assigned.`)) return;
+    setAssigningPlan(true);
+    try {
+      const result = await api.put(`/providers/division/${divisionId}/plan`, { planId: null });
+      setBatchPlanId('');
+      toast(`VDP plans unassigned from ${result.applied.providers} providers`);
+      reload();
+    } catch (error) { toast(error.message, 'bad'); }
+    setAssigningPlan(false);
+  };
 
   return (
     <div className="page">
@@ -102,7 +114,7 @@ export function ProviderList() {
             <option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option><option value="">All</option>
           </select>
         </Field>
-        {isAdmin && divisionId && <Field label="Batch assign VDP plan" htmlFor="pv-batch-plan">
+        {isAdmin && divisionId && <Field label="Batch VDP plan" htmlFor="pv-batch-plan">
           <div className="actions">
             <select id="pv-batch-plan" value={batchPlanId} onChange={(e) => setBatchPlanId(e.target.value)} disabled={assigningPlan}>
               <option value="">Choose a plan…</option>
@@ -112,6 +124,7 @@ export function ProviderList() {
               })}
             </select>
             <button className="btn btn-primary" onClick={assignPlan} disabled={!batchPlanId || assigningPlan}>{assigningPlan ? 'Assigning…' : 'Assign to division'}</button>
+            <button className="btn btn-danger" onClick={unassignPlans} disabled={assigningPlan}>{assigningPlan ? 'Working…' : 'Unassign all'}</button>
           </div>
         </Field>}
       </div>
