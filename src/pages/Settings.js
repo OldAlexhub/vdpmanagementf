@@ -129,6 +129,7 @@ function ProcessingGroupsCard() {
       hint="Combine two or three Compass divisions that belong to one VDP program. Their rosters and plans remain separate, but they share one upload and processing run."
       actions={<button className="btn btn-sm btn-primary" disabled={loading} onClick={() => { setSaveError(null); setEditing({ name: '', divisionIds: [] }); }}>Add group</button>}>
       <ErrorAlert error={error} />
+      {!editing && <ErrorAlert error={saveError} />}
       {loading ? <Loading /> : !data?.groups.length ? <div className="card-body"><Empty title="No processing groups">Each division is currently processed separately.</Empty></div> : <div className="table-wrap"><table className="table-compact">
         <thead><tr><th>Group</th><th>Compass divisions</th><th>Run owner</th><th /></tr></thead>
         <tbody>{data.groups.map((group) => <tr key={group._id}>
