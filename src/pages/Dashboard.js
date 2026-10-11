@@ -22,7 +22,7 @@ export default function Dashboard() {
     if (s.vdps.DISPUTED) return [`${s.vdps.DISPUTED} provider(s) reported an issue — auto-approval is paused until you answer.`, 'Review provider issues'];
     if (s.vdps.NEEDS_REVIEW) return [`${s.vdps.NEEDS_REVIEW} VDP(s) need review.`, 'Review exceptions'];
     if (s.vdps.READY) return [`${s.vdps.READY} VDP(s) are ready to approve.`, 'Review VDPs'];
-    if (s.vdps.PROCESSED) return [`${s.vdps.PROCESSED} VDP(s) are approved & processed — ready to mark as paid.`, 'Review VDPs'];
+    if (s.vdps.PROCESSED) return [`${s.vdps.PROCESSED} VDP(s) are approved & processed — ready to mark as paid.`, 'Open processed VDPs'];
     return null;
   })();
 
@@ -47,7 +47,7 @@ export default function Dashboard() {
       {loading && !s ? <Loading /> : s && (
         <div className="stack">
           {nextStep && (
-            <Alert tone="warn" action={<Link className="btn btn-sm btn-primary" to={nextStep[1] === 'Review exceptions' ? '/processing?status=NEEDS_REVIEW' : nextStep[1] === 'Review provider issues' ? '/processing?status=DISPUTED' : '/processing'}>{nextStep[1]}</Link>}>
+            <Alert tone="warn" action={<Link className="btn btn-sm btn-primary" to={nextStep[1] === 'Review exceptions' ? '/vdp-history?status=NEEDS_REVIEW' : nextStep[1] === 'Review provider issues' ? '/vdp-history?status=DISPUTED' : nextStep[1] === 'Review VDPs' ? '/vdp-history?status=READY' : nextStep[1] === 'Open processed VDPs' ? '/vdp-history?status=PROCESSED' : '/processing'}>{nextStep[1]}</Link>}>
               <strong>Next step:</strong> {nextStep[0]}
             </Alert>
           )}
@@ -58,14 +58,14 @@ export default function Dashboard() {
             <Stat label="VDPs calculated" value={`${s.vdps.calculated} / ${s.providersExpected}`} />
           </div>
           <div className="grid grid-3">
-            <Link className="stat-link" to="/processing?status=NEEDS_REVIEW"><Stat label="Needs review" value={s.vdps.NEEDS_REVIEW} tone={s.vdps.NEEDS_REVIEW ? 'bad' : undefined} /></Link>
-            <Link className="stat-link" to="/processing?status=READY"><Stat label="Ready" value={s.vdps.READY} /></Link>
-            <Link className="stat-link" to="/processing?status=APPROVED"><Stat label="Awaiting provider" value={s.vdps.APPROVED} tone={s.vdps.APPROVED ? 'warn' : undefined} note="Sent to provider portal" /></Link>
+            <Link className="stat-link" to="/vdp-history?status=NEEDS_REVIEW"><Stat label="Needs review" value={s.vdps.NEEDS_REVIEW} tone={s.vdps.NEEDS_REVIEW ? 'bad' : undefined} /></Link>
+            <Link className="stat-link" to="/vdp-history?status=READY"><Stat label="Ready" value={s.vdps.READY} /></Link>
+            <Link className="stat-link" to="/vdp-history?status=APPROVED"><Stat label="Awaiting provider" value={s.vdps.APPROVED} tone={s.vdps.APPROVED ? 'warn' : undefined} note="Sent to provider portal" /></Link>
           </div>
           <div className="grid grid-3">
-            <Link className="stat-link" to="/processing?status=PROCESSED"><Stat label="Approved & processed" value={s.vdps.PROCESSED} tone={s.vdps.PROCESSED ? 'ok' : undefined} note="Ready to mark paid" /></Link>
-            <Link className="stat-link" to="/processing?status=DISPUTED"><Stat label="Provider issues" value={s.vdps.DISPUTED} tone={s.vdps.DISPUTED ? 'bad' : undefined} note="Auto-approval paused" /></Link>
-            <Link className="stat-link" to="/processing?status=PAID"><Stat label="Paid" value={s.vdps.PAID} /></Link>
+            <Link className="stat-link" to="/vdp-history?status=PROCESSED"><Stat label="Approved & processed" value={s.vdps.PROCESSED} tone={s.vdps.PROCESSED ? 'ok' : undefined} note="Ready to mark paid" /></Link>
+            <Link className="stat-link" to="/vdp-history?status=DISPUTED"><Stat label="Provider issues" value={s.vdps.DISPUTED} tone={s.vdps.DISPUTED ? 'bad' : undefined} note="Auto-approval paused" /></Link>
+            <Link className="stat-link" to="/vdp-history?status=PAID"><Stat label="Paid" value={s.vdps.PAID} /></Link>
           </div>
           <div className="grid grid-3">
             <Stat label="Gross VDP" value={money(s.totals.gross)} />

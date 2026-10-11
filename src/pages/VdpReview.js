@@ -194,6 +194,11 @@ export function PerformanceCard({ view }) {
                 <Row label="Performance %" values={w('performancePercentage')} render={pct} />
                 <Row label="Incentive tier" values={w('tierLabel')} muted />
                 <Row label={perTrip ? 'Rate per trip' : 'Incentive rate'} values={w('incentiveRate')} render={rate} strong />
+                {perTrip && weeks.some((week) => Number(week.bonusHours) > 0) && <>
+                  <Row label="Regular trips" values={w('regularTrips')} render={num} />
+                  <Row label="Qualifying sixth-day trips" values={w('bonusHours')} render={num} />
+                  <Row label="Sixth-day trip rate" values={w('bonusRate')} render={rate} />
+                </>}
                 {!perTrip && <Row label="Core hours" values={w('corePaidHours')} render={num} />}
                 {!perTrip && <Row label="Bonus hours" values={w('bonusHours')} render={num} />}
               </>
@@ -242,7 +247,9 @@ export function OperatorsCard({ calc, perTrip, settings }) {
                     <div className="strong">{money(w.weeklyEarnings)}</div>
                     <div className="muted small">
                       {(o.paymentType ? o.paymentType === 'PER_TRIP' : perTrip)
-                        ? `${num(w.trips)} trips × ${rate(w.incentiveRate)}`
+                        ? Number(w.bonusHours) > 0
+                          ? `${num(w.regularTrips)} regular trips × ${rate(w.incentiveRate)} + ${num(w.bonusHours)} sixth-day trips × ${rate(w.bonusRate)}`
+                          : `${num(w.trips)} trips × ${rate(w.incentiveRate)}`
                         : <>{num(w.actualHours)} of {num(w.contractedHours)} h · {pct(w.performancePercentage)}<br />{w.tierLabel} · {rate(w.incentiveRate)}{Number(w.bonusHours) > 0 ? ` · ${num(w.bonusHours)} bonus h` : ''}</>}
                     </div>
                   </td>
@@ -326,14 +333,24 @@ export function GrossIncomeBreakdown({ calc, perTrip }) {
           <tbody>
             {rows.map(({ operator, week }, index) => {
               const tripPay = (operator.paymentType || (perTrip ? 'PER_TRIP' : 'HOURLY')) === 'PER_TRIP';
+              const sixthDayPay = tripPay && nonZero(week.bonusEarnings);
+              const separatedTui = !tripPay && nonZero(week.contractHoursIncentive);
               const formula = tripPay
-                ? `${num(week.trips)} trips x ${rate(week.incentiveRate)}`
-                : `${num(week.corePaidHours)} core h x ${rate(week.incentiveRate)}${nonZero(week.bonusEarnings) ? ` + ${num(week.bonusHours)} bonus h x ${rate(week.bonusRate)}` : ''}`;
+                ? sixthDayPay
+                  ? `${num(week.regularTrips)} regular trips x ${rate(week.incentiveRate)} + ${num(week.bonusHours)} sixth-day trips x ${rate(week.bonusRate)}`
+                  : `${num(week.trips)} trips x ${rate(week.incentiveRate)}`
+                : separatedTui
+                  ? `${num(week.corePaidHours)} revenue h x ${rate(week.baseRate)} + ${num(week.corePaidHours)} revenue h x ${rate(week.contractHoursIncentiveRate)}`
+                  : `${num(week.corePaidHours)} core h x ${rate(week.incentiveRate)}${nonZero(week.bonusEarnings) ? ` + ${num(week.bonusHours)} bonus h x ${rate(week.bonusRate)}` : ''}`;
               return (
                 <tr key={`${operator.name}-${week.weekNumber}-${index}`}>
                   <td>Week {week.weekNumber}</td>
                   <td>{operator.name || 'Provider'}{week.tierLabel && <div className="muted small">{week.tierLabel}</div>}</td>
-                  <td>{formula}<div className="muted small">{tripPay ? 'Trip earnings' : `Core ${money(week.coreEarnings)}${nonZero(week.bonusEarnings) ? ` + bonus ${money(week.bonusEarnings)}` : ''}`}</div></td>
+                  <td>{formula}<div className="muted small">{tripPay
+                    ? sixthDayPay ? `Regular ${money(week.coreEarnings)} + sixth-day ${money(week.bonusEarnings)}` : 'Trip earnings'
+                    : separatedTui
+                      ? `Core revenue ${money(week.baseEarnings)} + contract-hours incentive ${money(week.contractHoursIncentive)}`
+                      : `Core ${money(week.coreEarnings)}${nonZero(week.bonusEarnings) ? ` + bonus ${money(week.bonusEarnings)}` : ''}`}</div></td>
                   <td className="num strong">{money(week.weeklyEarnings)}</td>
                 </tr>
               );
@@ -654,7 +671,7 @@ export default function VdpReview() {
   return (
     <div className="page">
       <PageHead
-        crumbs={<><Link to="/processing">VDP Processing</Link> / {v.provider?.name}</>}
+        crumbs={<><Link to="/vdp-history">VDP History</Link> / {v.provider?.name}</>}
         title={<>{v.provider?.name} <StatusBadge status={vdp.status} /></>}
         sub={`${v.provider?.operatorName || ''} · Route ${(v.provider?.routes || []).join(', ') || '—'} · ${cycleLabel(v.cycle)}`}
         actions={<>

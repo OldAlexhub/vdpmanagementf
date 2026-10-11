@@ -233,6 +233,7 @@ const versionForm = (v) => ({
   attainmentHourMetric: v?.incentiveEnabled ? 'OTHER' : (v?.attainmentHourMetric || 'SAME_AS_PAID'),
   attainmentHourColumn: v?.attainmentHourColumn || (v?.incentiveEnabled ? 'Incentive Hours' : ''),
   attainmentScope: v?.attainmentScope || 'OPERATOR',
+  attainmentPercentageCap: v?.attainmentPercentageCap || '',
   uberConfig: v?.uberConfig ? {
     ...DEFAULT_UBER_CONFIG,
     ...v.uberConfig,
@@ -437,6 +438,9 @@ function VersionFields({ form, setForm, showDates = true }) {
             <option value="OPERATOR">Each operator separately</option>
             <option value="PROVIDER">Across all provider operators</option>
           </select>
+        </Field>}
+        {!uber && (form.incentiveEnabled || rateCard) && <Field label="Maximum attainment percentage" htmlFor="v-attainment-cap" help="Optional. Division 3 uses 100% because the Accounting workbook caps fulfillment at the forecast.">
+          <input id="v-attainment-cap" value={form.attainmentPercentageCap} onChange={set('attainmentPercentageCap')} placeholder="No cap" />
         </Field>}
         {!uber && (form.incentiveEnabled || rateCard) && form.attainmentHourMetric === 'OTHER' && (
           <Field label={form.incentiveEnabled ? 'In-window hours column' : 'Attainment report column'} htmlFor="v-attainment-column" full help={form.incentiveEnabled ? 'This column must already contain only worked-time overlap with the Compass TUI window; ordinary paid hours are not accepted.' : undefined}>
@@ -805,8 +809,8 @@ export function PlanDetail() {
                 <div><div className="k">Contracted hours</div><div className="v">{v.calculationType === 'UBER' || v.contractedHoursMode === 'OPERATOR_PROFILE' ? 'Operator profile' : v.contractedHours ? `${num(v.contractedHours)} / week` : '—'}</div></div>
                 {v.calculationType !== 'UBER' && <div><div className="k">Performance hours</div><div className="v">{METRIC_LABELS[v.performanceHourMetric]}{v.performanceHourColumn ? ` (${v.performanceHourColumn})` : ''}</div></div>}
                 {v.calculationType !== 'UBER' && <div><div className="k">TUI eligible</div><div className="v">{v.incentiveEnabled ? <Badge tone="ok">On</Badge> : <Badge>Off</Badge>}</div></div>}
-                {v.calculationType !== 'UBER' && <div><div className="k">Attainment</div><div className="v">{v.attainmentHourMetric === 'SAME_AS_PAID' ? 'Same as paid hours' : METRIC_LABELS[v.attainmentHourMetric] || v.attainmentHourColumn} · {v.attainmentScope === 'PROVIDER' ? 'provider-wide' : 'per operator'}</div></div>}
-                {v.calculationType !== 'UBER' && <div><div className="k">Bonus rate</div><div className="v">{v.bonusEnabled ? `${rate(v.bonusRate)}/hour above contract` : 'None'}</div></div>}
+                {v.calculationType !== 'UBER' && <div><div className="k">Attainment</div><div className="v">{v.attainmentHourMetric === 'SAME_AS_PAID' ? 'Same as paid hours' : METRIC_LABELS[v.attainmentHourMetric] || v.attainmentHourColumn} · {v.attainmentScope === 'PROVIDER' ? 'provider-wide' : 'per operator'}{v.attainmentPercentageCap ? ` · capped at ${num(v.attainmentPercentageCap)}%` : ''}</div></div>}
+                {v.calculationType !== 'UBER' && <div><div className="k">Bonus rate</div><div className="v">{v.bonusEnabled ? (v.bonusBasis === 'SIXTH_DAY_TRIPS' ? `${rate(v.bonusRate)}/qualifying sixth-day trip` : `${rate(v.bonusRate)}/hour above contract`) : 'None'}</div></div>}
                 {v.calculationType !== 'UBER' && <div><div className="k">Fuel</div><div className="v">{fuelSummary(v)}</div></div>}
               </div>
               {v.calculationType === 'UBER' && v.uberConfig && <UberRulesSummary config={v.uberConfig} />}

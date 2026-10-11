@@ -20,7 +20,7 @@ function StepLedger({ steps = [] }) {
   );
 }
 
-function Attainment({ week }) {
+function Attainment({ week, perTrip }) {
   if (week.performancePercentage === null || week.performancePercentage === undefined) return null;
   const p = Number(week.performancePercentage);
   const fill = Math.min(p, 100);
@@ -36,7 +36,9 @@ function Attainment({ week }) {
         {over > 0 && <div className="attain-over" style={{ left: `${(100 / 150) * 100}%`, width: `${(over / 150) * 100}%` }} />}
         {[80, 87, 95, 100].map((m) => <span key={m} className="attain-mark" style={{ left: `${(m / 150) * 100}%` }} />)}
       </div>
-      {Number(week.bonusHours) > 0 && <div className="attain-note">+{num(week.bonusHours)} h above contract paid at the bonus rate</div>}
+      {Number(week.bonusHours) > 0 && <div className="attain-note">{perTrip
+        ? `+${num(week.bonusHours)} qualifying sixth-day trips paid at the sixth-day rate`
+        : `+${num(week.bonusHours)} h above contract paid at the bonus rate`}</div>}
     </div>
   );
 }
@@ -171,7 +173,7 @@ export default function ExplainCalculation({ calc, settings }) {
                   </div>
                   <div className="calc-week-total">{money(w.weeklyEarnings)}</div>
                 </header>
-                {!perTrip && <Attainment week={w} />}
+                <Attainment week={w} perTrip={perTrip} />
                 {tiers && <TierLadder tiers={tiers} reached={w.tierIndex} perTrip={perTrip} />}
                 <StepLedger steps={w.steps} />
               </section>

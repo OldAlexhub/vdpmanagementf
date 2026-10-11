@@ -14,7 +14,9 @@ const processingDivisionQuery = (summary, selectedDivision) => {
   return ids.length > 1 ? { divisionIds: ids.join(','), status: 'ACTIVE' } : { divisionId: ids[0], status: 'ACTIVE' };
 };
 
-function UploadCard({ summary, division, onUploaded }) {
+// Kept as an exported legacy component for historical reports; the processing
+// flow no longer renders it as a fallback for an unconfigured division.
+export function UploadCard({ summary, division, onUploaded }) {
   const input = useRef();
   const [drag, setDrag] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -167,6 +169,7 @@ function UberUploadCard({ summary, division, onChanged, showUpload = true, showM
     if (input.current) input.current.value = '';
   };
   const invalidFiles = uber.files.filter((file) => file.validationStatus === 'INVALID' && file.status === 'INVALID');
+  const optional = !uber.required && (summary?.processingDivisions || [selectedDivision]).filter(Boolean).some(isDivision3Division);
   const removeFile = async (file) => {
     const invalid = file.validationStatus === 'INVALID';
     const message = invalid
@@ -195,15 +198,15 @@ function UberUploadCard({ summary, division, onChanged, showUpload = true, showM
   };
   const matches = showAll ? uber.driverMatches : uber.driverMatches.filter((match) => match.status !== 'MATCHED');
   return (
-    <Card title={showUpload ? 'Uber weekly data' : 'Uber driver matching'} hint={showUpload ? 'Upload one or more weekly Uber files. Each driver/week is validated and calculated independently.' : 'Confirm every uploaded driver against the provider and operator roster.'} body={false}
-      actions={<>{showUpload ? (uber.loaded && (uber.ready ?? true) ? <Badge tone="ok" dot>{uber.activeFileCount} active file(s)</Badge> : <Badge tone="bad" dot>{uber.missingWeeks?.length ? `${uber.missingWeeks.length} week(s) missing` : 'Missing'}</Badge>) : (uber.unresolvedCount ? <Badge tone="bad" dot>{uber.unresolvedCount} need review</Badge> : <Badge tone="ok" dot>Resolved</Badge>)}</>}>
+    <Card title={showUpload ? 'Uber weekly data' : 'Uber driver matching'} hint={showUpload ? (optional ? 'Optional for Division 3. If Uber data is supplied, upload both weekly files; each driver/week is validated independently.' : 'Upload one or more weekly Uber files. Each driver/week is validated and calculated independently.') : 'Confirm every uploaded driver against the provider and operator roster.'} body={false}
+      actions={<>{showUpload ? (uber.loaded && (uber.ready ?? true) ? <Badge tone="ok" dot>{uber.activeFileCount} active file(s)</Badge> : optional && !invalidFiles.length ? <Badge tone="info">Optional</Badge> : <Badge tone="bad" dot>{uber.missingWeeks?.length ? `${uber.missingWeeks.length} week(s) missing` : 'Missing'}</Badge>) : (uber.unresolvedCount ? <Badge tone="bad" dot>{uber.unresolvedCount} need review</Badge> : <Badge tone="ok" dot>Resolved</Badge>)}</>}>
       {showUpload && <div className="card-body stack">
         <div className="upload-drop">
           <input ref={input} type="file" accept=".xlsx,.xls,.csv" multiple hidden onChange={(e) => upload(e.target.files)} />
           <button className="btn btn-primary" disabled={busy || Boolean(removing)} onClick={() => input.current.click()}>{busy ? 'Validating...' : 'Upload Uber data'}</button>
           <div className="muted small" style={{ marginTop: 8 }}>.xlsx, .xls, or .csv | multiple weekly files allowed{!summary?.cycle && ' | file dates identify the VDP pay period'}</div>
         </div>
-        {uber.expectedWeeks?.length > 0 && <div className="actions">{uber.expectedWeeks.map((week) => <Badge key={week} tone={uber.weeksDetected?.includes(week) ? 'ok' : 'bad'}>{date(week, 'md')} {uber.weeksDetected?.includes(week) ? 'loaded' : 'missing'}</Badge>)}</div>}
+        {uber.expectedWeeks?.length > 0 && (!optional || uber.loaded) && <div className="actions">{uber.expectedWeeks.map((week) => <Badge key={week} tone={uber.weeksDetected?.includes(week) ? 'ok' : 'bad'}>{date(week, 'md')} {uber.weeksDetected?.includes(week) ? 'loaded' : 'missing'}</Badge>)}</div>}
         {invalidFiles.length > 0 && <Alert tone="warn" action={<div className="actions">
           <button className="btn btn-sm" disabled={Boolean(removing)} onClick={clearInvalid}>{removing === 'all' ? 'Clearing...' : `Clear ${invalidFiles.length} failed upload${invalidFiles.length === 1 ? '' : 's'}`}</button>
           <button className="btn btn-sm btn-primary" disabled={busy || Boolean(removing)} onClick={() => input.current?.click()}>Choose corrected files</button>
@@ -412,34 +415,143 @@ function Division3UploadCard({ kind, summary, division, onChanged }) {
   );
 }
 
-function Division3DriverRow({ match, providers, cycleId, onChanged }) {
-  const [providerId, setProviderId] = useState(match.suggestedProviderId || '');
-  const [operatorId, setOperatorId] = useState(match.suggestedOperatorId || '');
+function DivisionSourceUploadCard({ dataset, summary, division, onChanged }) {
+  const input = useRef();
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(null);
   const [error, setError] = useState(null);
-  const provider = providers.find((item) => item._id === providerId);
-  const operators = (provider?.operators || []).filter((operator) => operator.status === 'ACTIVE' && !operator.transferredTo);
-  const assign = async () => {
+  const files = dataset.files || [];
+  const selectedDivision = summary?.division || division;
+
+  const upload = async (selectedFiles) => {
+    if (!selectedFiles?.length) return;
     setBusy(true);
     setError(null);
+    const form = new FormData();
+    if (summary?.cycle?._id) form.append('cycleId', summary.cycle._id);
+    else form.append('divisionId', selectedDivision._id);
+    form.append('datasetType', dataset.id);
+    [...selectedFiles].forEach((file) => form.append('files', file));
     try {
-      await api.post('/division3-driver-matches', { cycleId, sourceName: match.sourceName, providerId, operatorId });
-      onChanged();
+      const result = await api.post('/division-source-imports', form);
+      onChanged(result.files, result.cycleId);
     } catch (e) { setError(e); }
     setBusy(false);
+    if (input.current) input.current.value = '';
   };
+
+  const remove = async (file) => {
+    if (!window.confirm(`${file.validationStatus === 'INVALID' ? 'Clear' : 'Remove'} “${file.fileName}”?`)) return;
+    setRemoving(file._id);
+    setError(null);
+    try {
+      await api.del(`/division-source-imports/${file._id}`);
+      toast(file.validationStatus === 'INVALID' ? 'Failed upload cleared' : `${dataset.title} file removed`);
+      onChanged();
+    } catch (e) { setError(e); }
+    setRemoving(null);
+  };
+
+  const status = dataset.required
+    ? dataset.ready ? <Badge tone="ok" dot>Ready</Badge>
+      : <Badge tone="bad" dot>{dataset.loaded ? 'Incomplete' : 'Missing'}</Badge>
+    : dataset.loaded ? <Badge tone="ok" dot>Loaded</Badge> : <Badge>Only when applicable</Badge>;
+  const expectedWeeks = dataset.expectedWeeks || [];
+  const loadedWeeks = dataset.weeksDetected || [];
+
+  return <Card title={dataset.title} hint={dataset.hint} body={false} actions={status}>
+    <div className="card-body stack">
+      <div className="upload-drop">
+        <input ref={input} type="file" accept={(dataset.accept || []).join(',')} multiple={dataset.multiple !== false} hidden onChange={(event) => upload(event.target.files)} />
+        <button className="btn btn-primary" disabled={busy || Boolean(removing)} onClick={() => input.current.click()}>{busy ? 'Validating…' : `Upload ${dataset.title}`}</button>
+        <div className="muted small" style={{ marginTop: 8 }}>{(dataset.accept || []).join(', ')} · {dataset.multiple === false ? 'one file' : 'multiple files allowed'}{!summary?.cycle && ' · source dates identify the VDP period'}</div>
+      </div>
+      {expectedWeeks.length > 0 && ['BOTH_WEEKS', 'CYCLE_OVERLAP'].includes(dataset.coverage) && <div className="actions">{expectedWeeks.map((week) => <Badge key={week} tone={loadedWeeks.includes(week) ? 'ok' : 'bad'}>{date(week, 'md')} {loadedWeeks.includes(week) ? 'loaded' : 'missing'}</Badge>)}</div>}
+      {dataset.coverage === 'EVERY_DAY' && dataset.expectedDates?.length > 0 && <Alert tone={dataset.missingDates?.length ? 'warn' : 'ok'}>{dataset.missingDates?.length ? `${dataset.missingDates.length} date(s) still missing: ${dataset.missingDates.map((item) => date(item, 'md')).join(', ')}` : `All ${dataset.expectedDates.length} period dates are covered.`}</Alert>}
+      <ErrorAlert error={error} />
+    </div>
+    {files.length > 0 && <div className="table-wrap" style={{ borderTop: '1px solid var(--border)' }}><table className="table-compact">
+      <thead><tr><th>File</th><th>Status</th><th className="num">Rows</th><th>Dates</th><th>Uploaded</th><th /></tr></thead>
+      <tbody>{files.map((file) => <tr key={file._id}>
+        <td><div className="strong">{file.fileName}</div>{file.sheetName && <div className="muted small">Sheet: {file.sheetName}</div>}</td>
+        <td>{file.validationStatus === 'VALID' && file.status === 'ACTIVE' ? <Badge tone="ok">Valid</Badge> : file.status === 'REPLACED' ? <Badge>Removed</Badge> : <><Badge tone="bad">Rejected</Badge><div className="small" style={{ color: 'var(--bad)' }}>{file.processingErrors?.join(' ')}</div></>}</td>
+        <td className="num">{file.rowCount}</td>
+        <td className="small">{file.dataRange?.from ? `${date(file.dataRange.from, 'md')} – ${date(file.dataRange.to, 'md')}` : '—'}</td>
+        <td className="small">{dateTime(file.uploadedAt)}<div className="muted">{file.uploadedBy?.name}</div></td>
+        <td className="num">{['ACTIVE', 'INVALID'].includes(file.status) && <button className="btn btn-ghost btn-sm" disabled={Boolean(removing)} onClick={() => remove(file)}>{removing === file._id ? 'Removing…' : file.validationStatus === 'INVALID' ? 'Clear' : 'Remove'}</button>}</td>
+      </tr>)}</tbody>
+    </table></div>}
+  </Card>;
+}
+
+function Division3DriverRow({ match, providers, processingDivisions, cycleId, onChanged }) {
+  const [providerId, setProviderId] = useState(match.suggestedProviderId || '');
+  const [operatorId, setOperatorId] = useState(match.suggestedOperatorId || '');
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState(null);
+  const targetDivisionNumber = match.service === 'GOLINK' ? '3GL' : '3';
+  const targetDivisionIds = new Set((processingDivisions || []).filter((division) => String(division.divisionNumber).trim().toUpperCase() === targetDivisionNumber).map((division) => division._id));
+  const eligibleProviders = targetDivisionIds.size ? providers.filter((item) => targetDivisionIds.has(item.divisionId?._id || item.divisionId)) : providers;
+  const provider = eligibleProviders.find((item) => item._id === providerId);
+  const operators = (provider?.operators || []).filter((operator) => operator.status === 'ACTIVE' && !operator.transferredTo);
+  const assign = async () => {
+    setBusy('match');
+    setError(null);
+    try {
+      await api.post('/division3-driver-matches', { cycleId, sourceName: match.sourceName, service: match.service, providerId, operatorId });
+      await onChanged();
+    } catch (e) { setError(e); }
+    setBusy('');
+  };
+  const setAside = async () => {
+    if (!window.confirm(`Set aside ${match.sourceName} (${match.service}) for this VDP cycle? Their uploaded rows will be excluded so you can process everyone else.`)) return;
+    setBusy('aside');
+    setError(null);
+    try {
+      await api.post('/division3-driver-exclusions', { cycleId, sourceName: match.sourceName, service: match.service });
+      await onChanged();
+    } catch (e) { setError(e); }
+    setBusy('');
+  };
+  const restore = async () => {
+    setBusy('restore');
+    setError(null);
+    try {
+      await api.post('/division3-driver-exclusions/restore', { cycleId, sourceName: match.sourceName, service: match.service });
+      await onChanged();
+    } catch (e) { setError(e); }
+    setBusy('');
+  };
+  const clearMatch = async () => {
+    if (!window.confirm(`Clear the manual match for ${match.sourceName} (${match.service})? The operator will become available to the correct source driver.`)) return;
+    setBusy('clear');
+    setError(null);
+    try {
+      await api.post('/division3-driver-matches/clear', { cycleId, sourceName: match.sourceName, service: match.service });
+      await onChanged();
+    } catch (e) { setError(e); }
+    setBusy('');
+  };
+  const needsReview = ['UNMATCHED', 'AMBIGUOUS', 'SUGGESTED'].includes(match.status);
   return <tr>
     <td><div className="strong">{match.sourceName}</div><div className="muted small">{match.services?.join(' + ') || 'ADA fare'} · {match.dates?.length || 0} service day(s)</div></td>
     <td>{match.status === 'MATCHED'
-      ? <><Badge tone="ok">Matched</Badge> {match.providerName} | {match.operatorName}</>
+      ? <><Badge tone="ok">{match.matchMethod?.startsWith('AUTO_') ? 'Auto-matched' : 'Matched'}</Badge> {match.providerName} | {match.operatorName}</>
+      : match.status === 'SET_ASIDE'
+        ? <><Badge tone="info">Set aside</Badge><span className="muted small"> Excluded from this VDP cycle{match.setAsideBy?.name ? ` by ${match.setAsideBy.name}` : ''}.</span></>
       : match.status === 'SUGGESTED'
         ? <><Badge tone="warn">Suggested</Badge> {match.suggestedProviderName} | {match.suggestedOperatorName}</>
         : <Badge tone="bad">Needs review</Badge>}</td>
-    <td className="num">{match.status !== 'MATCHED' && <div className="actions" style={{ justifyContent: 'flex-end' }}>
-      <select aria-label={`Provider for ${match.sourceName}`} value={providerId} onChange={(event) => { setProviderId(event.target.value); setOperatorId(''); }}><option value="">Choose provider...</option>{providers.map((item) => <option key={item._id} value={item._id}>{item.name}</option>)}</select>
+    <td className="num">{needsReview && <div className="actions" style={{ justifyContent: 'flex-end' }}>
+      <select aria-label={`Provider for ${match.sourceName}`} value={providerId} onChange={(event) => { setProviderId(event.target.value); setOperatorId(''); }}><option value="">Choose provider...</option>{eligibleProviders.map((item) => <option key={item._id} value={item._id}>{item.name}</option>)}</select>
       <select aria-label={`Operator for ${match.sourceName}`} value={operatorId} onChange={(event) => setOperatorId(event.target.value)} disabled={!providerId}><option value="">Choose operator...</option>{operators.map((operator) => <option key={operator.id || operator._id} value={operator.id || operator._id}>{operator.name}</option>)}</select>
-      <button className="btn btn-sm btn-primary" disabled={busy || !providerId || !operatorId} onClick={assign}>{busy ? 'Saving...' : 'Match'}</button>
-    </div>}{error && <div className="small" style={{ color: 'var(--bad)' }}>{error.message}</div>}</td>
+      <button className="btn btn-sm btn-primary" disabled={Boolean(busy) || !providerId || !operatorId} onClick={assign}>{busy === 'match' ? 'Saving...' : 'Match'}</button>
+      <button className="btn btn-sm" disabled={Boolean(busy)} onClick={setAside}>{busy === 'aside' ? 'Setting aside...' : 'Set aside'}</button>
+    </div>}
+    {match.status === 'SET_ASIDE' && <button className="btn btn-sm" disabled={Boolean(busy)} onClick={restore}>{busy === 'restore' ? 'Restoring...' : 'Restore'}</button>}
+    {match.status === 'MATCHED' && match.matchMethod === 'MANUAL' && <button className="btn btn-ghost btn-sm" disabled={Boolean(busy)} onClick={clearMatch}>{busy === 'clear' ? 'Clearing...' : 'Clear match'}</button>}
+    {error && <div className="small" style={{ color: 'var(--bad)' }}>{error.message}</div>}</td>
   </tr>;
 }
 
@@ -448,12 +560,14 @@ function Division3MatchingCard({ summary, onChanged }) {
   const providerDivisionIds = (summary.processingDivisions || [summary.division]).map((item) => item._id).join(',');
   const providers = useLoad(() => api.get('/providers', processingDivisionQuery(summary, summary.division)), [providerDivisionIds]);
   const matches = summary.division3Data?.driverMatches || [];
-  const visible = showAll ? matches : matches.filter((match) => match.status !== 'MATCHED');
+  const unresolved = matches.filter((match) => ['UNMATCHED', 'AMBIGUOUS', 'SUGGESTED'].includes(match.status));
+  const setAsideCount = matches.filter((match) => match.status === 'SET_ASIDE').length;
+  const visible = showAll ? matches : unresolved;
   return <Card title="ADA / GoLink driver matching" body={false}
-    hint="Match source driver names to Compass operators. Exact unique names are matched automatically."
-    actions={<><Badge tone={summary.division3Data?.unresolvedCount ? 'bad' : 'ok'} dot>{summary.division3Data?.unresolvedCount ? `${summary.division3Data.unresolvedCount} need review` : 'Resolved'}</Badge><button className="btn btn-sm" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show only issues' : `Show all ${matches.length}`}</button></>}>
-    {visible.length ? <div className="table-wrap"><table className="table-compact"><thead><tr><th>Source driver</th><th>Provider / operator</th><th /></tr></thead><tbody>{visible.map((match) => <Division3DriverRow key={match.sourceKey} match={match} providers={providers.data || []} cycleId={summary.cycle._id} onChanged={onChanged} />)}</tbody></table></div>
-      : <div className="card-body muted small">{matches.length ? 'Every source driver is matched.' : 'No Division 3 drivers have been loaded yet.'}</div>}
+    hint="Matches each source service to its Compass division. Missing or ambiguous operators can be set aside for this cycle and excluded while everyone else is processed."
+    actions={<><Badge tone={summary.division3Data?.unresolvedCount ? 'bad' : 'ok'} dot>{summary.division3Data?.unresolvedCount ? `${summary.division3Data.unresolvedCount} need review` : 'Ready'}</Badge>{setAsideCount > 0 && <Badge tone="info">{setAsideCount} set aside</Badge>}<button className="btn btn-sm" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show only issues' : `Show all ${matches.length} service matches`}</button></>}>
+    {visible.length ? <div className="table-wrap"><table className="table-compact"><thead><tr><th>Source driver</th><th>Provider / operator</th><th /></tr></thead><tbody>{visible.map((match) => <Division3DriverRow key={match.sourceKey} match={match} providers={providers.data || []} processingDivisions={summary.processingDivisions || [summary.division]} cycleId={summary.cycle._id} onChanged={onChanged} />)}</tbody></table></div>
+      : <div className="card-body muted small">{matches.length ? 'No driver matches need review. Use “Show all” to restore set-aside drivers or clear a manual match.' : 'No Division 3 drivers have been loaded yet.'}</div>}
   </Card>;
 }
 
@@ -662,6 +776,10 @@ export default function Processing() {
     () => (cycleId ? api.get(`/cycles/${cycleId}`) : Promise.resolve(null)),
     [cycleId, refreshKey],
   );
+  const sourceContractLoad = useLoad(
+    () => (selectedDivision?._id ? api.get(`/division-source-contracts/${selectedDivision._id}`) : Promise.resolve(null)),
+    [selectedDivision?._id],
+  );
   const refresh = () => { setRefreshKey((key) => key + 1); };
 
   useEffect(() => {
@@ -698,9 +816,6 @@ export default function Processing() {
     if (message) toast(message);
   };
 
-  const standardUploaded = (doc) => {
-    detectedCycle(doc.cycleId, doc.duplicate ? 'This report is already loaded; its VDP period was selected.' : `Report loaded: ${doc.rowCount} rows. VDP period identified from its dates.`);
-  };
   const uberChanged = (files, detectedId) => {
     if (detectedId) detectedCycle(detectedId, 'Uber data validated. VDP period identified from its dates.');
     else refresh();
@@ -710,6 +825,14 @@ export default function Processing() {
     if (detectedId) detectedCycle(detectedId, 'DIV 3 data validated. VDP period identified from its dates.');
     else refresh();
     if (files && !detectedId) toast(`${files.filter((file) => file.validationStatus === 'VALID').length} DIV 3 file(s) validated`);
+  };
+  const divisionSourceChanged = (files, detectedId) => {
+    const validCount = files?.filter((file) => file.validationStatus === 'VALID').length || 0;
+    if (detectedId && !cycleId) detectedCycle(detectedId, `${validCount} source file(s) validated. VDP period identified from the source dates.`);
+    else {
+      refresh();
+      if (files) toast(`${validCount} source file(s) validated`);
+    }
   };
 
   const process = async () => {
@@ -732,19 +855,29 @@ export default function Processing() {
   const uber = summary?.uberPerformance;
   const uberTolls = summary?.uberTolls;
   const division3Data = summary?.division3Data;
+  const divisionSources = summary?.divisionSources;
   const requirements = summary?.inputRequirements;
   const division2 = String(selectedDivision?.divisionNumber || '').trim() === '2';
+  const division12 = String(selectedDivision?.divisionNumber || '').trim() === '12';
   const division3 = selectedDivisions.some(isDivision3Division);
+  const sourceDatasets = divisionSources ? Object.values(divisionSources.datasets || {}) : (sourceContractLoad.data?.datasets || []);
+  const requiredSourceDatasets = sourceDatasets.filter((dataset) => dataset.stage === 'REQUIRED');
+  const additionalSourceDatasets = sourceDatasets.filter((dataset) => dataset.stage === 'ADDITIONAL');
+  const genericSourcesConfigured = Boolean(divisionSources?.configured || sourceContractLoad.data?.configured);
   const requiredDataLoaded = Boolean(summary) && (division3
-    ? division3Data?.sources?.DIV3_ADA?.ready && division3Data?.sources?.DIV3_GOLINK?.ready && uber?.loaded && (uber?.ready ?? true)
-    : (!requirements.standardProviderCount || perf?.loaded) && (!requirements.uberRequired || (uber?.loaded && (uber?.ready ?? true))));
+    ? division3Data?.sources?.DIV3_ADA?.ready && division3Data?.sources?.DIV3_GOLINK?.ready
+    : (requirements.divisionSourcesRequired ? divisionSources?.requiredReady : (division2 || division12))
+      && (!requirements.uberRequired || (uber?.loaded && (uber?.ready ?? true))));
   const additionalDataReady = Boolean(summary) && (division3
-    ? division3Data?.sources?.DIV3_ADA_FARE?.ready
-    : (!requirements.tollsRequired || uberTolls?.ready));
-  const standardReady = Boolean(summary) && (division3 || !requirements.standardProviderCount || (perf?.loaded && !perf.unresolvedCount));
-  const uberReady = Boolean(summary) && (!requirements.uberRequired || (uber?.loaded && (uber?.ready ?? true) && !uber.unresolvedCount));
+    ? division3Data?.sources?.DIV3_ADA_FARE?.ready && (!requirements.tollsRequired || uberTolls?.ready)
+    : (!requirements.divisionSourcesRequired || divisionSources?.additionalReady) && (!requirements.tollsRequired || uberTolls?.ready));
+  const standardReady = Boolean(summary) && (!requirements.standardPerformanceRequired || (perf?.loaded && !perf.unresolvedCount));
+  const uberReady = Boolean(summary) && (uber?.loaded
+    ? (uber?.ready ?? true) && !uber.unresolvedCount
+    : !requirements.uberRequired);
   const division3Ready = !division3 || summary?.providersExpected === 0 || !division3Data?.unresolvedCount;
-  const canProcess = standardReady && uberReady && additionalDataReady && division3Ready;
+  const sourceProcessingReady = !requirements?.divisionSourcesRequired || divisionSources?.processingSupported;
+  const canProcess = requiredDataLoaded && standardReady && uberReady && additionalDataReady && division3Ready && sourceProcessingReady;
   const processed = Boolean(v?.calculated);
   const enabledSteps = [true, selectedDivisionIds.length > 0, requiredDataLoaded, requiredDataLoaded && additionalDataReady, processed];
 
@@ -781,7 +914,7 @@ export default function Processing() {
                 </option>)}
               </select>
             </Field>
-            {selectedGroup && <Alert tone="info"><strong>{selectedGroup.name}:</strong> {division3 ? 'DIV 3 supplies the ADA roster and DIV 3GL supplies the GoLink roster. Uber remains a required Division 3 dataset.' : 'These Compass divisions will share one VDP processing run while retaining their own rosters and plans.'}</Alert>}
+            {selectedGroup && <Alert tone="info"><strong>{selectedGroup.name}:</strong> {division3 ? 'DIV 3 supplies the ADA roster and DIV 3GL supplies the GoLink roster. Uber weekly data is optional.' : 'These Compass divisions will share one VDP processing run while retaining their own rosters and plans.'}</Alert>}
             {selectedDivisions.length > 0 && <div className="explain"><strong>{selectedDivisions.map((division) => `DIV ${division.divisionNumber}`).join(' + ')}</strong><div className="muted small">{selectedDivisions.reduce((total, division) => total + Number(division.activeProviders || 0), 0)} active provider(s) · {selectedDivisions.reduce((total, division) => total + Number(division.activePlans || 0), 0)} active VDP plan(s)</div></div>}
             {sel.cyclesLoading && <Loading text="Checking generated VDP periods…" />}
             {!sel.cyclesLoading && !sel.cycles.length && selectedDivision && <Alert tone="info" action={<Link className="btn btn-sm" to="/cycles">Go to Cycles</Link>}>This division has no generated VDP periods. Generate periods before uploading data.</Alert>}
@@ -794,20 +927,24 @@ export default function Processing() {
         <div className="stack">
           {!summary && <Alert tone="info">Upload the first core dataset for DIV {selectedDivision.divisionNumber}. Its source dates will select the matching generated VDP period automatically. After that, this step will show the exact remaining requirements for that period.</Alert>}
           {loading && cycleId ? <Loading text="Loading identified VDP period…" /> : !summary ? <>
-            {!division2 && !division3 && <UploadCard division={selectedDivision} onUploaded={standardUploaded} />}
             {division3 && <>
               <Division3UploadCard kind="DIV3_ADA" division={selectedDivision} onChanged={division3Changed} />
               <Division3UploadCard kind="DIV3_GOLINK" division={selectedDivision} onChanged={division3Changed} />
             </>}
-            <UberUploadCard division={selectedDivision} onChanged={uberChanged} showMatching={false} />
+            {(division2 || division12) && <UberUploadCard division={selectedDivision} onChanged={uberChanged} showMatching={false} />}
+            {!division2 && !division3 && !division12 && sourceContractLoad.loading && <Loading text="Loading this division's source-file contract…" />}
+            {!division2 && !division3 && !division12 && sourceContractLoad.error && <ErrorAlert error={sourceContractLoad.error} />}
+            {!division2 && !division3 && !division12 && requiredSourceDatasets.filter((dataset) => dataset.cycleLocator).map((dataset) => <DivisionSourceUploadCard key={dataset.id} dataset={dataset} division={selectedDivision} onChanged={divisionSourceChanged} />)}
+            {!division2 && !division3 && !division12 && !sourceContractLoad.loading && !genericSourcesConfigured && <Alert tone="warn"><strong>No upload contract is configured for DIV {selectedDivision.divisionNumber}.</strong> No unrestricted uploader is available. Add representative raw source files before enabling this division.</Alert>}
           </> : <>
             <Alert tone="ok"><strong>VDP period identified:</strong> {cycleLabel(summary.cycle)} · payment {date(summary.cycle.paymentDate)}.</Alert>
+            {divisionSources?.targetWorkbooks?.length > 0 && <Alert tone="info">Upload requirements were traced backward from <strong>{divisionSources.targetWorkbooks.join(' and ')}</strong> and verified against the available source-file samples.</Alert>}
             {division3 ? <>
               <Division3UploadCard kind="DIV3_ADA" summary={summary} division={selectedDivision} onChanged={division3Changed} />
               <Division3UploadCard kind="DIV3_GOLINK" summary={summary} division={selectedDivision} onChanged={division3Changed} />
-            </> : requirements.standardProviderCount > 0 && <UploadCard summary={summary} division={selectedDivision} onUploaded={standardUploaded} />}
-            {requirements.uberRequired && <UberUploadCard summary={summary} division={selectedDivision} onChanged={uberChanged} showMatching={false} />}
-            {!division3 && !requirements.standardProviderCount && !requirements.uberRequired && <Alert tone="warn">This period has no active providers with a processable VDP plan.</Alert>}
+            </> : requiredSourceDatasets.map((dataset) => <DivisionSourceUploadCard key={dataset.id} dataset={dataset} summary={summary} division={selectedDivision} onChanged={divisionSourceChanged} />)}
+            {(requirements.uberRequired || division3) && <UberUploadCard summary={summary} division={selectedDivision} onChanged={uberChanged} showMatching={false} />}
+            {!division3 && !requirements.divisionSourcesRequired && !requirements.uberRequired && <Alert tone="warn"><strong>No source-file contract is configured for this division.</strong> Processing remains disabled until representative raw files define the accepted schemas.</Alert>}
           </>}
           <div className="pipeline-actions"><button className="btn" onClick={() => setStep(1)}>Back</button><button className="btn btn-primary" disabled={!requiredDataLoaded} onClick={() => setStep(3)}>Next: additional data</button></div>
         </div>
@@ -818,10 +955,15 @@ export default function Processing() {
           {division3 ? <>
             <Division3UploadCard kind="DIV3_ADA_FARE" summary={summary} division={selectedDivision} onChanged={division3Changed} />
             <Division3UploadCard kind="DIV3_RETURNED_FARE" summary={summary} division={selectedDivision} onChanged={division3Changed} />
+            {requirements.tollsRequired && <UberTollUploadCard summary={summary} onChanged={reload} />}
             <Alert tone="info">Returned fare reconciliation does not block this step. Missing collection detail stays visible as an NSM-pending review item and must be completed before final Accounting approval.</Alert>
-          </> : requirements.tollsRequired ? <UberTollUploadCard summary={summary} onChanged={reload} /> : <Card title="Additional datasets" hint="Supplemental inputs for this division and pay period.">
-            <Empty title="No additional datasets configured for this division">Nothing additional is required for this division's current flow.</Empty>
-          </Card>}
+          </> : <>
+            {additionalSourceDatasets.map((dataset) => <DivisionSourceUploadCard key={dataset.id} dataset={dataset} summary={summary} division={selectedDivision} onChanged={divisionSourceChanged} />)}
+            {requirements.tollsRequired && <UberTollUploadCard summary={summary} onChanged={reload} />}
+            {!additionalSourceDatasets.length && !requirements.tollsRequired && <Card title="Additional datasets" hint="Supplemental inputs for this division and pay period.">
+              <Empty title="No additional datasets configured for this division">Nothing additional is required for this division's current flow.</Empty>
+            </Card>}
+          </>}
           <div className="pipeline-actions"><button className="btn" onClick={() => setStep(2)}>Back</button><button className="btn btn-primary" disabled={!additionalDataReady} onClick={() => setStep(4)}>Next: validate data</button></div>
         </div>
       )}
@@ -830,11 +972,11 @@ export default function Processing() {
         <div className="stack">
           <div className="grid grid-3">
             <Stat label="Providers expected" value={summary.providersExpected} note="Active providers in division" />
-            <Stat label="Required datasets" value={requiredDataLoaded && additionalDataReady ? 'Uploaded' : 'Missing'} tone={requiredDataLoaded && additionalDataReady ? 'ok' : 'bad'} note={division3 ? 'ADA · GoLink · Uber · ADA fare' : `${requirements.standardProviderCount} standard · ${requirements.uberProviderCount} Uber provider(s)`} />
-            <Stat label="Validation" value={canProcess ? 'Ready' : 'Needs attention'} tone={canProcess ? 'ok' : 'bad'} note={division3 ? `${division3Data?.unresolvedCount || 0} ADA/GoLink driver · ${uber?.unresolvedCount || 0} Uber driver issue(s)` : `${perf?.unresolvedCount || 0} route · ${uber?.unresolvedCount || 0} driver · ${uberTolls?.missingWeeks?.length || 0} toll week issue(s)`} />
+            <Stat label="Required datasets" value={requiredDataLoaded && additionalDataReady ? 'Uploaded' : 'Missing'} tone={requiredDataLoaded && additionalDataReady ? 'ok' : 'bad'} note={division3 ? 'ADA · GoLink · ADA fare (Uber optional)' : requirements.divisionSourcesRequired ? `${sourceDatasets.filter((dataset) => dataset.required).length} division-specific dataset(s)` : `${requirements.uberProviderCount} Uber provider(s)`} />
+            <Stat label="Validation" value={canProcess ? 'Ready' : requirements.divisionSourcesRequired && divisionSources?.ready ? 'Files validated' : 'Needs attention'} tone={canProcess || (requirements.divisionSourcesRequired && divisionSources?.ready) ? 'ok' : 'bad'} note={division3 ? `${division3Data?.unresolvedCount || 0} ADA/GoLink driver · ${uber?.unresolvedCount || 0} Uber driver issue(s)` : requirements.divisionSourcesRequired ? 'Every upload was checked against its exact source schema' : `${uber?.unresolvedCount || 0} driver · ${uberTolls?.missingWeeks?.length || 0} toll week issue(s)`} />
           </div>
-          {division3 ? <Division3MatchingCard summary={summary} onChanged={reload} /> : requirements.standardProviderCount > 0 && <RoutesCard summary={summary} onChanged={reload} />}
-          {requirements.uberRequired && <UberUploadCard summary={summary} division={selectedDivision} onChanged={uberChanged} showUpload={false} />}
+          {division3 ? <Division3MatchingCard summary={summary} onChanged={reload} /> : requirements.standardPerformanceRequired && <RoutesCard summary={summary} onChanged={reload} />}
+          {(requirements.uberRequired || uber.loaded) && <UberUploadCard summary={summary} division={selectedDivision} onChanged={uberChanged} showUpload={false} />}
           {division3 && <Card title="ADA fare reconciliation" hint="Template-equivalent daily fare checks and cash deduction totals.">
             <div className="grid grid-4">
               <Stat label="Driver/day fares" value={division3Data?.fareReconciliation?.rowCount || 0} />
@@ -845,8 +987,10 @@ export default function Processing() {
           </Card>}
           <Card title="Process VDPs" hint="Calculates every active provider’s VDP from the validated datasets, plan, and provider profile. Approved VDPs are never changed."
             actions={<button className="btn btn-primary" disabled={!canProcess || processing} onClick={process}>{processing ? 'Processing…' : v.total ? 'Re-process VDPs' : 'Process VDPs'}</button>}>
-            {requirements.standardProviderCount > 0 && !perf.loaded && <Alert tone="warn">Upload the Performance Report first.</Alert>}
-            {perf.loaded && perf.unresolvedCount > 0 && <Alert tone="warn">Resolve the routes that need review above before processing.</Alert>}
+            {requirements.standardPerformanceRequired && !perf.loaded && <Alert tone="warn">Upload the required Performance Report first.</Alert>}
+            {requirements.standardPerformanceRequired && perf.loaded && perf.unresolvedCount > 0 && <Alert tone="warn">Resolve the routes that need review above before processing.</Alert>}
+            {requirements.divisionSourcesRequired && divisionSources?.ready && !divisionSources.processingSupported && <Alert tone="info"><strong>The exact source files are validated and safely staged.</strong> Calculation remains disabled for DIV {selectedDivision.divisionNumber} until its source-to-VDP calculation adapter is verified against the reference template.</Alert>}
+            {!division3 && !requirements.divisionSourcesRequired && !requirements.uberRequired && <Alert tone="warn">This division has no verified source-file contract, so processing is disabled.</Alert>}
             {requirements.uberRequired && !uber.loaded && <Alert tone="warn">Upload valid Uber weekly data first.</Alert>}
             {uber.loaded && uber.unresolvedCount > 0 && <Alert tone="warn">Match the Uber drivers that need review above before processing.</Alert>}
             {division3 && division3Data?.unresolvedCount > 0 && summary.providersExpected > 0 && <Alert tone="warn">Match the ADA and GoLink drivers that need review above before processing.</Alert>}

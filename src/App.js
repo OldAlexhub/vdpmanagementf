@@ -6,6 +6,7 @@ import { AuthScreen } from './pages/Auth';
 import Dashboard from './pages/Dashboard';
 import Processing from './pages/Processing';
 import VdpReview from './pages/VdpReview';
+import VdpHistory from './pages/VdpHistory';
 import { ProviderList, ProviderProfile, ProviderEdit } from './pages/Providers';
 import Divisions from './pages/Divisions';
 import { PlanList, PlanDetail } from './pages/Plans';
@@ -21,6 +22,7 @@ export const useAuth = () => useContext(AuthContext);
 const NAV = [
   ['/', 'Dashboard', '◧'],
   ['/processing', 'VDP Processing', '▶'],
+  ['/vdp-history', 'VDP History', '◷'],
   ['/reports', 'Reports', '▥'],
   ['/providers', 'Providers', '◉'],
   ['/lift-leases', 'Lift Leases', '$'],
@@ -55,6 +57,7 @@ function Shell({ user, onLogout }) {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/processing" element={<Processing />} />
+          <Route path="/vdp-history" element={<VdpHistory />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/vdps/:id" element={<VdpReview />} />
           <Route path="/providers" element={<ProviderList />} />
