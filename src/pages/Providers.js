@@ -9,6 +9,40 @@ import BulkImport from '../components/BulkImport';
 import { useAuth } from '../App';
 
 const leaseText = (l) => (!l || l.frequency === 'NONE' || !l.amount ? 'None' : `${money(l.amount)} / ${LEASE_LABELS[l.frequency]}`);
+const DAY_NAMES = { MON: 'Mon', TUE: 'Tue', WED: 'Wed', THU: 'Thu', FRI: 'Fri', SAT: 'Sat', SUN: 'Sun' };
+const daysText = (days = []) => {
+  const names = days.map((day) => DAY_NAMES[day] || day);
+  const joined = names.join(',');
+  if (joined === 'Mon,Tue,Wed,Thu,Fri') return 'Mon-Fri';
+  if (joined === 'Mon,Tue,Wed,Thu,Fri,Sat,Sun') return 'Daily';
+  if (joined === 'Sat,Sun') return 'Sat-Sun';
+  return names.join(', ');
+};
+
+function TuiWindow({ operator }) {
+  const windows = operator.tuiWindows || [];
+  if (!windows.length) {
+    return operator.source?.system === 'COMPASS'
+      ? <Badge tone="warn">No Compass window</Badge>
+      : <span className="muted">-</span>;
+  }
+  return <div className="stack" style={{ gap: 4 }}>{windows.map((window, index) => {
+    const overrides = window.weekdayTimes || [];
+    const overridden = new Set(overrides.map((entry) => entry.day));
+    const commonDays = (window.daysOfWeek || []).filter((day) => !overridden.has(day));
+    const lines = [
+      ...(window.startTime && window.endTime && commonDays.length
+        ? [`${daysText(commonDays)} ${window.startTime}-${window.endTime}`] : []),
+      ...overrides.map((entry) => `${DAY_NAMES[entry.day] || entry.day} ${entry.startTime}-${entry.endTime}`),
+      ...(!overrides.length && window.startTime && window.endTime && !commonDays.length
+        ? [`${window.startTime}-${window.endTime}`] : []),
+    ];
+    return <div key={window.externalRunCutId || `${window.route || 'window'}-${index}`}>
+      {lines.map((line) => <div className="nowrap" key={line}><span className="mono">{line}</span></div>)}
+      {windows.length > 1 && window.route && <div className="muted small">Run {window.route}</div>}
+    </div>;
+  })}</div>;
+}
 
 // List rows carry the raw provider; older providers keep their lease on the provider itself.
 function leaseSummary(p) {
@@ -319,7 +353,7 @@ export function ProviderProfile() {
       <Card title="Operators" hint="Uber operators sharing a vehicle are combined into one weekly pay unit; the provider is paid the total." body={false}>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Operator</th><th>Vehicle / pay unit</th><th>Route / run</th><th>VDP plan</th>{uber && !bandedUber && <th>Base hourly rate</th>}<th>Contracted hours</th><th>Lift lease</th><th>Status</th><th /></tr></thead>
+            <thead><tr><th>Operator</th><th>Vehicle / pay unit</th><th>Route / run</th><th>VDP plan</th>{uber && !bandedUber && <th>Base hourly rate</th>}<th>Contracted hours</th><th>TUI window</th><th>Lift lease</th><th>Status</th><th /></tr></thead>
             <tbody>
               {(p.operators || []).map((o) => {
                 const basePay = o.basePay || p.overrides?.basePay;
@@ -346,6 +380,7 @@ export function ProviderProfile() {
                       : s?.contractedHours.value
                         ? <>{num(s.contractedHours.value)} / week <span className="source-tag source-plan">{s.contractedHours.source === 'PLAN' ? 'Plan' : 'Provider'}</span></>
                         : '—'}</td>
+                  <td><TuiWindow operator={o} /></td>
                   <td className="nowrap">{leaseText(o.liftLease)}</td>
                   <td>{o.transferredTo ? <Badge>Moved</Badge> : <ActiveBadge status={o.status} />}</td>
                   <td className="num">
@@ -386,7 +421,7 @@ export function ProviderProfile() {
   );
 }
 
-const blankOperator = () => ({ name: '', vehicleUnit: '', routes: '', status: 'ACTIVE', basePay: '', contractedHours: '', planId: '', liftLease: { amount: '', frequency: 'WEEKLY' } });
+const blankOperator = () => ({ name: '', vehicleUnit: '', routes: '', status: 'ACTIVE', basePay: '', contractedHours: '', planId: '', liftLease: { amount: '', frequency: 'WEEKLY', optionId: '', optionName: '' } });
 
 const emptyProvider = {
   name: '', providerNumber: '', divisionId: '', status: 'ACTIVE', serviceType: '', planId: '',
@@ -406,23 +441,40 @@ const operatorForm = (o) => ({
   basePay: o.basePay || '',
   contractedHours: o.contractedHours || '',
   planId: o.planId || '',
-  liftLease: { amount: o.liftLease?.amount || '', frequency: o.liftLease?.frequency || 'NONE' },
+  liftLease: {
+    amount: o.liftLease?.amount || '',
+    frequency: o.liftLease?.frequency || 'NONE',
+    optionId: o.liftLease?.optionId || '',
+    optionName: o.liftLease?.optionName || '',
+  },
   employeeId: o.employeeId || '',
   transferredFrom: o.transferredFrom || null, // shown only; dates are set by "Move to another provider"
 });
 
-function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber = false, requireBaseRate = false, plans = [], plansLoading = false, providerPlanId, rosterManaged = false, leaseManaged = false }) {
+function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber = false, requireBaseRate = false, plans = [], plansLoading = false, providerPlanId, rosterManaged = false, leaseManaged = false, leaseOptions = [], divisionDefault = null }) {
   const providerPlan = plans.find((p) => p._id === providerPlanId);
   const planChoices = plans.filter((p) => p._id !== providerPlanId && (p.status === 'ACTIVE' || operators.some((o) => o.planId === p._id)));
   const inheritedPlanLabel = providerPlan ? `Provider's plan — ${providerPlan.name}` : 'Provider has no default plan';
   const update = (i, patch) => onChange(operators.map((o, j) => (j === i ? { ...o, ...patch } : o)));
   const lease = (i, k, v) => update(i, { liftLease: { ...operators[i].liftLease, [k]: v } });
+  const selectLeaseOption = (i, optionId) => {
+    const option = leaseOptions.find((item) => item._id === optionId);
+    if (option) {
+      update(i, { liftLease: { optionId: option._id, optionName: option.name, frequency: option.frequency, amount: option.amount || '' } });
+      return;
+    }
+    if (leaseManaged && divisionDefault?.configured) {
+      update(i, { liftLease: { optionId: '', optionName: '', frequency: divisionDefault.frequency, amount: divisionDefault.amount || '' } });
+      return;
+    }
+    update(i, { liftLease: { ...operators[i].liftLease, optionId: '', optionName: '' } });
+  };
   return (
     <div className="stack">
       <div className="table-wrap">
         <table className="table-compact">
           <thead>
-            <tr><th>Operator</th><th>Vehicle / pay unit</th><th>Route / run</th><th>VDP plan</th>{requireBaseRate && <th>Base $/hour</th>}<th>Contracted h/week</th><th>Lift lease</th><th>Lease amount ($)</th><th>Status</th><th /></tr>
+            <tr><th>Operator</th><th>Vehicle / pay unit</th><th>Route / run</th><th>VDP plan</th>{requireBaseRate && <th>Base $/hour</th>}<th>Contracted h/week</th><th>Lease option</th><th>Frequency</th><th>Amount ($)</th><th>Status</th><th /></tr>
           </thead>
           <tbody>
             {operators.map((o, i) => (
@@ -444,11 +496,17 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber
                 {requireBaseRate && <td><input aria-label={`Operator ${i + 1} base hourly rate`} value={o.basePay} onChange={(e) => update(i, { basePay: e.target.value })} placeholder={providerBasePay ? `Provider: ${rate(providerBasePay)}` : 'Optional override'} style={{ width: 110 }} /></td>}
                 <td><input aria-label={`Operator ${i + 1} contracted hours`} value={o.contractedHours} onChange={(e) => update(i, { contractedHours: e.target.value })} placeholder={rosterManaged ? 'No assigned run cut' : uber ? 'Required' : planHours ? `Plan: ${num(planHours)}` : 'Plan'} style={{ width: 140 }} disabled={rosterManaged} /></td>
                 <td>
-                  <select aria-label={`Operator ${i + 1} lease frequency`} value={o.liftLease.frequency} onChange={(e) => lease(i, 'frequency', e.target.value)} disabled={leaseManaged}>
+                  <select aria-label={`Operator ${i + 1} lease option`} value={o.liftLease.optionId || ''} onChange={(e) => selectLeaseOption(i, e.target.value)} style={{ minWidth: 150 }}>
+                    <option value="">{leaseManaged ? 'Division default' : 'Custom amount'}</option>
+                    {leaseOptions.filter((option) => option.status === 'ACTIVE' || option._id === o.liftLease.optionId).map((option) => <option key={option._id} value={option._id}>{option.name}</option>)}
+                  </select>
+                </td>
+                <td>
+                  <select aria-label={`Operator ${i + 1} lease frequency`} value={o.liftLease.frequency} onChange={(e) => lease(i, 'frequency', e.target.value)} disabled={leaseManaged || Boolean(o.liftLease.optionId)}>
                     <option value="WEEKLY">Weekly</option><option value="PER_VDP_CYCLE">Per VDP cycle</option><option value="NONE">No lease</option>
                   </select>
                 </td>
-                <td>{o.liftLease.frequency !== 'NONE' && <input aria-label={`Operator ${i + 1} lease amount`} value={o.liftLease.amount} onChange={(e) => lease(i, 'amount', e.target.value)} placeholder="197.50" style={{ width: 90 }} disabled={leaseManaged} />}</td>
+                <td>{o.liftLease.frequency !== 'NONE' && <input aria-label={`Operator ${i + 1} lease amount`} value={o.liftLease.amount} onChange={(e) => lease(i, 'amount', e.target.value)} placeholder="197.50" style={{ width: 90 }} disabled={leaseManaged || Boolean(o.liftLease.optionId)} />}</td>
                 <td>
                   <select aria-label={`Operator ${i + 1} status`} value={o.status} onChange={(e) => update(i, { status: e.target.value })} disabled={rosterManaged}>
                     <option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option>
@@ -465,6 +523,7 @@ function OperatorsEditor({ operators, onChange, planHours, providerBasePay, uber
         Routes as shown in the Performance Report “Run/Route” column; separate several with commas. A route belongs to one operator.
         {uber ? `${requireBaseRate ? 'This flat-rate Uber plan uses the provider base hourly rate unless an operator-specific rate is entered. ' : 'This Uber plan gets its hourly rates from plan bands. '}Contracted hours stay on each operator profile. Give operators the same Vehicle / pay unit when they share one vehicle contract. Their weekly data is combined for eligibility and the vehicle lease is charged once. ` : ''}
         Operators without a shared vehicle are measured against their own contracted hours{uber ? '' : ' (blank = plan)'}, and each distinct vehicle lease is charged once.
+        Saved lease options come from the provider’s division. Selecting one copies its controlled frequency and amount to the operator; choosing the division default removes the exception.
         Only plans from this provider’s division are available. An operator on a different VDP plan is paid entirely under that plan (rates, TUI, hours column, fuel); the provider’s overrides stay with the provider’s plan.
         The provider receives one VDP with the total.
       </p>
@@ -483,6 +542,10 @@ export function ProviderEdit() {
   const compass = useLoad(() => api.get('/compass/status'), []);
   const plans = useLoad(
     () => (form?.divisionId ? api.get('/vdp-plans', { divisionId: form.divisionId }) : Promise.resolve([])),
+    [form?.divisionId],
+  );
+  const leaseOptions = useLoad(
+    () => (form?.divisionId ? api.get('/lift-leases', { divisionId: form.divisionId }) : Promise.resolve({ divisions: [], options: [], defaults: [] })),
     [form?.divisionId],
   );
 
@@ -518,7 +581,8 @@ export function ProviderEdit() {
   const uber = cur?.calculationType === 'UBER';
   const requireUberBaseRate = uber && (cur.uberConfig?.rateStructureType || 'FLAT') === 'FLAT';
   const rosterManaged = form.source?.system === 'COMPASS';
-  const divisionLeaseManaged = Boolean(divisions.data?.find((division) => division._id === form.divisionId)?.liftLease?.configured);
+  const selectedDivision = divisions.data?.find((division) => division._id === form.divisionId);
+  const divisionLeaseManaged = Boolean(selectedDivision?.liftLease?.configured);
 
   if (!id && compass.data?.configured) {
     return <div className="page">
@@ -553,13 +617,19 @@ export function ProviderEdit() {
       <div className="stack">
         <ErrorAlert error={error} />
         <ErrorAlert error={plans.error} />
+        <ErrorAlert error={leaseOptions.error} />
         {rosterManaged && <Alert tone="info">Compass controls the provider name, division, status, operators, routes, vehicles, and weekly contracted hours calculated from active run-cut service hours. Payment settings, leases, contact details, and notes remain editable here.</Alert>}
         <Card title="Provider">
           <div className="form-grid">
             <Field label="Provider name" htmlFor="f-name"><input id="f-name" value={form.name} onChange={set('name')} placeholder="Rimo Transit LLC" disabled={rosterManaged} /></Field>
             <Field label="Provider number" htmlFor="f-num"><input id="f-num" value={form.providerNumber || ''} onChange={set('providerNumber')} /></Field>
             <Field label="Division" htmlFor="f-div">
-              <select id="f-div" value={form.divisionId} onChange={(e) => setForm({ ...form, divisionId: e.target.value, planId: '' })} disabled={rosterManaged}>
+              <select id="f-div" value={form.divisionId} onChange={(e) => setForm({
+                ...form,
+                divisionId: e.target.value,
+                planId: '',
+                operators: form.operators.map((operator) => ({ ...operator, planId: '', liftLease: { ...operator.liftLease, optionId: '', optionName: '' } })),
+              })} disabled={rosterManaged}>
                 <option value="">Choose…</option>
                 {(divisions.data || []).map((d) => <option key={d._id} value={d._id}>DIV {d.divisionNumber} – {d.name}</option>)}
               </select>
@@ -571,8 +641,8 @@ export function ProviderEdit() {
           </div>
         </Card>
 
-        <Card title="Operators" hint={divisionLeaseManaged ? 'Roster and contracted hours come from Compass; lift lease comes from the division Lift Leases tab.' : rosterManaged ? 'Roster and contracted hours come from Compass run cuts; operator pay rates stay in VDP.' : 'The provider is the one who gets paid. Add each operator (driver) who works for them.'}>
-          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={plans.data || []} plansLoading={plans.loading} providerPlanId={form.planId} rosterManaged={rosterManaged} leaseManaged={divisionLeaseManaged} />
+        <Card title="Operators" hint={divisionLeaseManaged ? 'Compass controls the roster. Each operator uses the division lease default unless you select an additional saved option.' : rosterManaged ? 'Roster and contracted hours come from Compass run cuts; operator pay rates and division lease options stay editable in VDP.' : 'The provider is the one who gets paid. Add each operator (driver) who works for them.'}>
+          <OperatorsEditor operators={form.operators} onChange={(operators) => setForm({ ...form, operators })} planHours={cur?.contractedHours} providerBasePay={form.overrides.basePay} uber={uber} requireBaseRate={requireUberBaseRate} plans={plans.data || []} plansLoading={plans.loading} providerPlanId={form.planId} rosterManaged={rosterManaged} leaseManaged={divisionLeaseManaged} leaseOptions={leaseOptions.data?.options || []} divisionDefault={selectedDivision?.liftLease} />
           {form.movedAway?.length > 0 && (
             <p className="muted small" style={{ marginTop: 8 }}>
               Moved to another provider (kept for earlier cycles): {form.movedAway.map((o) => `${o.name} → ${o.transferredTo.providerName} from ${date(o.transferredTo.effectiveDate)}`).join('; ')}.

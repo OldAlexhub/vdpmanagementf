@@ -12,6 +12,7 @@ export function useDivisionCycle() {
   const [divisionId, setDivisionIdState] = useState(read('vdp.divisionId'));
   const [cycleId, setCycleIdState] = useState(read('vdp.cycleId'));
   const [loading, setLoading] = useState(true);
+  const [cyclesLoading, setCyclesLoading] = useState(false);
 
   useEffect(() => {
     api.get('/divisions').then((all) => {
@@ -24,7 +25,8 @@ export function useDivisionCycle() {
   }, []);
 
   useEffect(() => {
-    if (!divisionId) { setCycles([]); return; }
+    if (!divisionId) { setCycles([]); setCyclesLoading(false); return; }
+    setCyclesLoading(true);
     api.get('/cycles', { divisionId }).then((list) => {
       setCycles(list);
       if (!list.some((c) => c._id === cycleId)) {
@@ -33,14 +35,21 @@ export function useDivisionCycle() {
           || list.find((c) => c.cycleStart.slice(0, 10) <= today) || list[0];
         setCycleId(pick?._id || '');
       }
-    });
+      setCyclesLoading(false);
+    }).catch(() => setCyclesLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [divisionId]);
 
-  function setDivisionId(id) { write('vdp.divisionId', id); setDivisionIdState(id); }
+  function setDivisionId(id) {
+    write('vdp.divisionId', id);
+    write('vdp.cycleId', '');
+    setCycles([]);
+    setCycleIdState('');
+    setDivisionIdState(id);
+  }
   function setCycleId(id) { write('vdp.cycleId', id); setCycleIdState(id); }
 
-  return { divisions, cycles, divisionId, cycleId, setDivisionId, setCycleId, loading };
+  return { divisions, cycles, divisionId, cycleId, setDivisionId, setCycleId, loading, cyclesLoading };
 }
 
 export function DivisionCyclePicker({ sel }) {

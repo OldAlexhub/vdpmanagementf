@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../App';
-import { Badge, Card, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
+import { Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
 import CompassSettingsCard from '../components/CompassRoster';
 
 export function PasswordCard() {
@@ -86,6 +86,80 @@ function UsersCard() {
   );
 }
 
+function ProcessingGroupsCard() {
+  const toast = useToast();
+  const { data, loading, error, reload } = useLoad(async () => {
+    const [divisions, groups] = await Promise.all([api.get('/divisions'), api.get('/settings/processing-groups')]);
+    return { divisions: divisions.filter((division) => division.status === 'ACTIVE'), groups };
+  }, []);
+  const [editing, setEditing] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+
+  const saveGroups = async (groups, message) => {
+    setSaveError(null);
+    try {
+      await api.put('/settings/processing-groups', {
+        groups: groups.map((group) => ({ name: group.name, divisionIds: group.divisionIds })),
+      });
+      setEditing(null);
+      reload();
+      toast(message);
+    } catch (e) { setSaveError(e); }
+  };
+
+  const save = () => {
+    const groups = data.groups.filter((group) => group._id !== editing._id);
+    const next = { ...editing, divisionIds: [...new Set(editing.divisionIds)] };
+    saveGroups([...groups, next], editing._id ? 'Processing group updated' : 'Processing group added');
+  };
+
+  const remove = (group) => {
+    if (!window.confirm(`Remove the processing group “${group.name}”? Its divisions will be processed separately.`)) return;
+    saveGroups(data.groups.filter((item) => item._id !== group._id), 'Processing group removed');
+  };
+
+  const toggle = (id) => setEditing((current) => {
+    const selected = current.divisionIds.includes(id);
+    if (!selected && current.divisionIds.length >= 3) return current;
+    return { ...current, divisionIds: selected ? current.divisionIds.filter((item) => item !== id) : [...current.divisionIds, id] };
+  });
+
+  return (
+    <Card title="VDP processing groups" body={false}
+      hint="Combine two or three Compass divisions that belong to one VDP program. Their rosters and plans remain separate, but they share one upload and processing run."
+      actions={<button className="btn btn-sm btn-primary" disabled={loading} onClick={() => { setSaveError(null); setEditing({ name: '', divisionIds: [] }); }}>Add group</button>}>
+      <ErrorAlert error={error} />
+      {loading ? <Loading /> : !data?.groups.length ? <div className="card-body"><Empty title="No processing groups">Each division is currently processed separately.</Empty></div> : <div className="table-wrap"><table className="table-compact">
+        <thead><tr><th>Group</th><th>Compass divisions</th><th>Run owner</th><th /></tr></thead>
+        <tbody>{data.groups.map((group) => <tr key={group._id}>
+          <td className="strong">{group.name}</td>
+          <td>{group.divisions.map((division) => <Badge key={division._id} tone="accent">DIV {division.divisionNumber} – {division.name}</Badge>)}</td>
+          <td>DIV {group.divisions[0]?.divisionNumber || '—'}<div className="muted small">Owns the shared VDP period</div></td>
+          <td className="num"><div className="actions" style={{ justifyContent: 'flex-end' }}><button className="btn btn-sm" onClick={() => { setSaveError(null); setEditing({ _id: group._id, name: group.name, divisionIds: [...group.divisionIds] }); }}>Edit</button><button className="btn btn-sm btn-ghost" onClick={() => remove(group)}>Remove</button></div></td>
+        </tr>)}</tbody>
+      </table></div>}
+      {editing && <Modal title={editing._id ? 'Edit processing group' : 'Add processing group'} onClose={() => setEditing(null)}
+        footer={<><button className="btn" onClick={() => setEditing(null)}>Cancel</button><button className="btn btn-primary" disabled={!editing.name.trim() || editing.divisionIds.length < 2 || editing.divisionIds.length > 3} onClick={save}>Save group</button></>}>
+        <div className="stack">
+          <Alert tone="info">Choose two or three divisions. The first selected division owns the shared VDP period; every member keeps its own Compass providers and VDP plans.</Alert>
+          <Field label="Group name" htmlFor="processing-group-name"><input id="processing-group-name" value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} placeholder="Division 3 – ADA + GoLink" /></Field>
+          <Field label="Compass divisions" help={`${editing.divisionIds.length} of 3 selected`}>
+            <div className="division-picks">{data.divisions.map((division) => {
+              const checked = editing.divisionIds.includes(division._id);
+              const usedBy = data.groups.find((group) => group._id !== editing._id && group.divisionIds.includes(division._id));
+              return <label key={division._id} className={`division-pick ${checked ? 'selected' : ''}`}>
+                <input type="checkbox" checked={checked} disabled={Boolean(usedBy) || (!checked && editing.divisionIds.length >= 3)} onChange={() => toggle(division._id)} />
+                <span><strong>DIV {division.divisionNumber} – {division.name}</strong><small>{usedBy ? `Already in ${usedBy.name}` : checked && editing.divisionIds[0] === division._id ? 'Run owner' : 'Available'}</small></span>
+              </label>;
+            })}</div>
+          </Field>
+          <ErrorAlert error={saveError} />
+        </div>
+      </Modal>}
+    </Card>
+  );
+}
+
 function RulesCard() {
   return (
     <Card title="How VDPs are calculated">
@@ -115,7 +189,7 @@ export default function Settings() {
           <PasswordCard />
           <RulesCard />
         </div>
-        {user.role === 'ADMIN' && <div className="stack"><CompassSettingsCard /><UsersCard /></div>}
+        {user.role === 'ADMIN' && <div className="stack"><CompassSettingsCard /><ProcessingGroupsCard /><UsersCard /></div>}
       </div>
     </div>
   );
