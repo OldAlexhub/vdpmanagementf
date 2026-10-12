@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, downloadFile } from '../api';
 import ExplainCalculation from '../components/Explain';
 import { IssueList } from '../components/Issues';
@@ -647,6 +647,10 @@ function ProviderApprovalBanner({ vdp }) {
 
 export default function VdpReview() {
   const { id } = useParams();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedReturn = searchParams.get('from') || '';
+  const returnTo = requestedReturn.startsWith('/vdps') ? requestedReturn : '/vdps';
   const toast = useToast();
   const { data: vdp, loading, error, setData, reload } = useLoad(() => api.get(`/vdps/${id}`), [id]);
   const types = useLoad(() => api.get('/vdps/adjustment-types'), []);
@@ -671,7 +675,7 @@ export default function VdpReview() {
   return (
     <div className="page">
       <PageHead
-        crumbs={<><Link to="/vdps">VDPs</Link> / {v.provider?.name}</>}
+        crumbs={<><Link to={returnTo}>{returnTo.startsWith('/vdps/approved') ? 'Approved VDPs' : 'VDPs'}</Link> / {v.provider?.name}</>}
         title={<>{v.provider?.name} <StatusBadge status={vdp.status} /></>}
         sub={`${v.provider?.operatorName || ''} · Route ${(v.provider?.routes || []).join(', ') || '—'} · ${cycleLabel(v.cycle)}`}
         actions={<>
@@ -772,8 +776,11 @@ export default function VdpReview() {
           onClose={() => setDialog(null)}
           onConfirm={async () => {
             const d = await api.post(`/vdps/${id}/approve`);
-            setData(d);
             toast(d.status === 'PROCESSED' ? 'Approved — submission date has passed, so it was auto-approved' : 'Approved and sent to the provider');
+            const divisionId = d.view?.division?.id || d.divisionId || v.division?.id;
+            navigate(`/vdps/approved${divisionId ? `?divisionId=${encodeURIComponent(divisionId)}` : ''}`, {
+              state: { approvedCount: 1, skippedCount: 0 },
+            });
           }} />
       )}
       {dialog === 'answer' && (

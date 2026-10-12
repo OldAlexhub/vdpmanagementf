@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard';
 import Processing from './pages/Processing';
 import VdpReview from './pages/VdpReview';
 import Vdps from './pages/Vdps';
+import ApprovedVdps from './pages/ApprovedVdps';
 import { ProviderList, ProviderProfile, ProviderEdit } from './pages/Providers';
 import Divisions from './pages/Divisions';
 import { PlanList, PlanDetail } from './pages/Plans';
@@ -68,6 +69,7 @@ function Shell({ user, onLogout }) {
           <Route path="/" element={<Dashboard />} />
           <Route path="/processing" element={<Processing />} />
           <Route path="/vdps" element={<Vdps />} />
+          <Route path="/vdps/approved" element={<ApprovedVdps />} />
           <Route path="/vdp-history" element={<Navigate to="/vdps" replace />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/vdps/:id" element={<VdpReview />} />

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { date, money } from '../format';
 import { Alert, Empty, ErrorAlert, Loading, PageHead, StatusBadge, VDP_STATUS } from '../components/ui';
@@ -7,6 +7,7 @@ import { Alert, Empty, ErrorAlert, Loading, PageHead, StatusBadge, VDP_STATUS } 
 const queueOrder = { DISPUTED: 0, NEEDS_REVIEW: 1, READY: 2, APPROVED: 3, PROCESSED: 4, PAID: 5, DRAFT: 6 };
 
 export default function Vdps() {
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const status = params.get('status') || '';
   const cycleId = params.get('cycleId') || '';
@@ -60,8 +61,18 @@ export default function Vdps() {
     try {
       const result = await api.post('/vdps/bulk-approve', { ids });
       setSelected(new Set());
+      if (result.approved?.length) {
+        const approvedDivisions = [...new Set(rows
+          .filter((row) => result.approved.some((id) => String(id) === String(row._id)))
+          .map((row) => String(row.divisionId)))];
+        const divisionQuery = approvedDivisions.length === 1 ? `?divisionId=${encodeURIComponent(approvedDivisions[0])}` : '';
+        navigate(`/vdps/approved${divisionQuery}`, {
+          state: { approvedCount: result.approved.length, skippedCount: result.skipped?.length || 0 },
+        });
+        return;
+      }
       await load();
-      if (result.skipped?.length) setError(new Error(`${result.approved.length} approved; ${result.skipped.length} changed and still need review.`));
+      if (result.skipped?.length) setError(new Error(`No VDPs were approved; ${result.skipped.length} changed and still need review.`));
     } catch (e) { setError(e); } finally { setBusy(false); }
   };
   const nextException = () => {
@@ -88,7 +99,7 @@ export default function Vdps() {
   return (
     <div className="page page-wide">
       <PageHead title="VDPs" sub="One queue for exceptions, approval, processed statements, payment, and history."
-        actions={<div className="actions"><button className="btn" disabled={!exceptionRows.length} onClick={nextException}>Next exception <span className="muted">N</span></button><button className="btn btn-success" disabled={busy || selectedReadyCount === 0} onClick={approveSelected}>{busy ? 'Approving…' : `Approve selected${selectedReadyCount ? ` (${selectedReadyCount})` : ''}`}</button></div>} />
+        actions={<div className="actions"><Link className="btn" to="/vdps/approved">Approved VDPs</Link><button className="btn" disabled={!exceptionRows.length} onClick={nextException}>Next exception <span className="muted">N</span></button><button className="btn btn-success" disabled={busy || selectedReadyCount === 0} onClick={approveSelected}>{busy ? 'Approving…' : `Approve selected${selectedReadyCount ? ` (${selectedReadyCount})` : ''}`}</button></div>} />
       <div className="filters" style={{ marginBottom: 16 }}>
         <div className="field"><label htmlFor="vdp-status">Queue</label><select id="vdp-status" value={status} onChange={(e) => setParams((current) => { if (e.target.value) current.set('status', e.target.value); else current.delete('status'); current.delete('selected'); return current; })}><option value="">All VDPs</option>{Object.entries(VDP_STATUS).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select></div>
         <span className="muted small">↑/↓ moves through the queue · N opens the next exception</span>
