@@ -106,6 +106,7 @@ function LeaseRow({ division, canEdit, onSaved }) {
 
 export default function LiftLeases() {
   const { user } = useAuth();
+  const toast = useToast();
   const canEdit = user.role === 'ADMIN';
   const leases = useLoad(() => api.get('/lift-leases'), []);
   const [editing, setEditing] = useState(null);
