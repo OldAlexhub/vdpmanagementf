@@ -360,15 +360,27 @@ function Division3UploadCard({ kind, summary, division, onChanged }) {
     if (!files?.length) return;
     setBusy(true);
     setError(null);
-    const form = new FormData();
-    if (summary?.cycle?._id) form.append('cycleId', summary.cycle._id);
-    else form.append('divisionId', selectedDivision._id);
-    form.append('kind', kind);
-    [...files].forEach((file) => form.append('files', file));
+    const uploaded = [];
+    let detectedCycleId = summary?.cycle?._id || null;
     try {
-      const result = await api.post('/division3-imports', form);
-      onChanged(result.files, result.cycleId);
-    } catch (e) { setError(e); }
+      // Large Compass workbooks are intentionally sent one at a time. Node
+      // streams each temporary file into driver/day aggregates before the next
+      // request starts; neither the browser nor API buffers both weeks at once.
+      for (const file of [...files]) {
+        const form = new FormData();
+        if (detectedCycleId) form.append('cycleId', detectedCycleId);
+        else form.append('divisionId', selectedDivision._id);
+        form.append('kind', kind);
+        form.append('files', file);
+        const result = await api.post('/division3-imports', form);
+        uploaded.push(...result.files);
+        detectedCycleId ||= result.cycleId;
+      }
+      onChanged(uploaded, summary?.cycle?._id ? null : detectedCycleId);
+    } catch (e) {
+      setError(e);
+      if (uploaded.length) onChanged(uploaded, summary?.cycle?._id ? null : detectedCycleId);
+    }
     setBusy(false);
     if (input.current) input.current.value = '';
   };
@@ -743,6 +755,7 @@ export default function Processing() {
   const [processError, setProcessError] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedDivisionIds, setSelectedDivisionIds] = useState([]);
+  const [startFresh, setStartFresh] = useState(false);
   const processingGroupFor = (division) => processingGroups.find((group) => group.divisionIds.includes(division?._id));
   const divisionsForSelection = (division) => {
     const group = processingGroupFor(division);
@@ -798,18 +811,35 @@ export default function Processing() {
     const ids = option.divisions.map((division) => division._id);
     const primaryId = option.group?.divisionIds?.[0] || ids[0] || '';
     setSelectedDivisionIds(ids);
+    setStartFresh(false);
     sel.setDivisionId(primaryId);
   };
 
   useEffect(() => {
     setCycleId('');
     setStep(1);
+    setStartFresh(false);
     setProcessError(null);
   }, [sel.divisionId]);
+
+  useEffect(() => {
+    if (startFresh || cycleId || sel.cyclesLoading || !selectedDivision || !sel.cycles.length) return;
+    const resumableStatuses = new Set(['PROCESSING', 'READY_FOR_REVIEW']);
+    const remembered = sel.cycles.find((cycle) => cycle._id === sel.cycleId && resumableStatuses.has(cycle.status));
+    const resumable = remembered || sel.cycles.find((cycle) => resumableStatuses.has(cycle.status));
+    if (!resumable) return;
+    setCycleId(resumable._id);
+    sel.setCycleId(resumable._id);
+    setStep(2);
+    // Resume only cycles whose status proves that data was already staged or
+    // processed. OPEN/UPCOMING cycles still use source dates for detection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startFresh, cycleId, sel.cyclesLoading, sel.cycleId, sel.cycles, selectedDivision?._id]);
 
   const detectedCycle = (detectedId, message) => {
     const id = String(detectedId?._id || detectedId || '');
     if (!id) return;
+    setStartFresh(false);
     setCycleId(id);
     sel.setCycleId(id);
     refresh();
@@ -864,6 +894,7 @@ export default function Processing() {
   const requiredSourceDatasets = sourceDatasets.filter((dataset) => dataset.stage === 'REQUIRED');
   const additionalSourceDatasets = sourceDatasets.filter((dataset) => dataset.stage === 'ADDITIONAL');
   const genericSourcesConfigured = Boolean(divisionSources?.configured || sourceContractLoad.data?.configured);
+  const sourceRoutesRequired = Boolean(divisionSources?.processingSupported && requirements?.standardProviderCount > 0);
   const requiredDataLoaded = Boolean(summary) && (division3
     ? division3Data?.sources?.DIV3_ADA?.ready && division3Data?.sources?.DIV3_GOLINK?.ready
     : (requirements.divisionSourcesRequired ? divisionSources?.requiredReady : (division2 || division12))
@@ -871,7 +902,7 @@ export default function Processing() {
   const additionalDataReady = Boolean(summary) && (division3
     ? division3Data?.sources?.DIV3_ADA_FARE?.ready && (!requirements.tollsRequired || uberTolls?.ready)
     : (!requirements.divisionSourcesRequired || divisionSources?.additionalReady) && (!requirements.tollsRequired || uberTolls?.ready));
-  const standardReady = Boolean(summary) && (!requirements.standardPerformanceRequired || (perf?.loaded && !perf.unresolvedCount));
+  const standardReady = Boolean(summary) && (!(requirements.standardPerformanceRequired || sourceRoutesRequired) || (perf?.loaded && !perf.unresolvedCount));
   const uberReady = Boolean(summary) && (uber?.loaded
     ? (uber?.ready ?? true) && !uber.unresolvedCount
     : !requirements.uberRequired);
@@ -975,7 +1006,7 @@ export default function Processing() {
             <Stat label="Required datasets" value={requiredDataLoaded && additionalDataReady ? 'Uploaded' : 'Missing'} tone={requiredDataLoaded && additionalDataReady ? 'ok' : 'bad'} note={division3 ? 'ADA · GoLink · ADA fare (Uber optional)' : requirements.divisionSourcesRequired ? `${sourceDatasets.filter((dataset) => dataset.required).length} division-specific dataset(s)` : `${requirements.uberProviderCount} Uber provider(s)`} />
             <Stat label="Validation" value={canProcess ? 'Ready' : requirements.divisionSourcesRequired && divisionSources?.ready ? 'Files validated' : 'Needs attention'} tone={canProcess || (requirements.divisionSourcesRequired && divisionSources?.ready) ? 'ok' : 'bad'} note={division3 ? `${division3Data?.unresolvedCount || 0} ADA/GoLink driver · ${uber?.unresolvedCount || 0} Uber driver issue(s)` : requirements.divisionSourcesRequired ? 'Every upload was checked against its exact source schema' : `${uber?.unresolvedCount || 0} driver · ${uberTolls?.missingWeeks?.length || 0} toll week issue(s)`} />
           </div>
-          {division3 ? <Division3MatchingCard summary={summary} onChanged={reload} /> : requirements.standardPerformanceRequired && <RoutesCard summary={summary} onChanged={reload} />}
+          {division3 ? <Division3MatchingCard summary={summary} onChanged={reload} /> : (requirements.standardPerformanceRequired || sourceRoutesRequired) && perf?.loaded && <RoutesCard summary={summary} onChanged={reload} />}
           {(requirements.uberRequired || uber.loaded) && <UberUploadCard summary={summary} division={selectedDivision} onChanged={uberChanged} showUpload={false} />}
           {division3 && <Card title="ADA fare reconciliation" hint="Template-equivalent daily fare checks and cash deduction totals.">
             <div className="grid grid-4">
@@ -989,7 +1020,8 @@ export default function Processing() {
             actions={<button className="btn btn-primary" disabled={!canProcess || processing} onClick={process}>{processing ? 'Processing…' : v.total ? 'Re-process VDPs' : 'Process VDPs'}</button>}>
             {requirements.standardPerformanceRequired && !perf.loaded && <Alert tone="warn">Upload the required Performance Report first.</Alert>}
             {requirements.standardPerformanceRequired && perf.loaded && perf.unresolvedCount > 0 && <Alert tone="warn">Resolve the routes that need review above before processing.</Alert>}
-            {requirements.divisionSourcesRequired && divisionSources?.ready && !divisionSources.processingSupported && <Alert tone="info"><strong>The exact source files are validated and safely staged.</strong> Calculation remains disabled for DIV {selectedDivision.divisionNumber} until its source-to-VDP calculation adapter is verified against the reference template.</Alert>}
+            {sourceRoutesRequired && perf.loaded && perf.unresolvedCount > 0 && <Alert tone="warn">Resolve the normalized DIV {selectedDivision.divisionNumber} routes that need review above before processing.</Alert>}
+            {requirements.divisionSourcesRequired && divisionSources?.ready && !divisionSources.processingSupported && <Alert tone="info"><strong>The exact source files are validated and safely staged.</strong> {divisionSources.processingBlockReason || `Calculation remains disabled for DIV ${selectedDivision.divisionNumber} until its source-to-VDP calculation adapter is verified against the reference template.`}</Alert>}
             {!division3 && !requirements.divisionSourcesRequired && !requirements.uberRequired && <Alert tone="warn">This division has no verified source-file contract, so processing is disabled.</Alert>}
             {requirements.uberRequired && !uber.loaded && <Alert tone="warn">Upload valid Uber weekly data first.</Alert>}
             {uber.loaded && uber.unresolvedCount > 0 && <Alert tone="warn">Match the Uber drivers that need review above before processing.</Alert>}
@@ -1024,7 +1056,7 @@ export default function Processing() {
             <Stat label="Total deductions" value={money(summary.totals.deductions)} note={`Additions ${money(summary.totals.additions)}`} />
             <Stat label="Net VDP" value={money(summary.totals.net)} tone="ok" />
           </div>}
-          <div className="pipeline-actions"><button className="btn" onClick={() => setStep(4)}>Back to validation</button><button className="btn" onClick={() => { setCycleId(''); setStep(1); }}>Start another division or period</button></div>
+          <div className="pipeline-actions"><button className="btn" onClick={() => setStep(4)}>Back to validation</button><button className="btn" onClick={() => { setStartFresh(true); setCycleId(''); sel.setCycleId(''); setStep(1); }}>Start another division or period</button></div>
           <p className="muted small">Status legend: {Object.values(VDP_STATUS).map((item) => item.label).join(' → ')}</p>
         </div>
       )}
