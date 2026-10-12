@@ -21,7 +21,7 @@ export function PasswordCard() {
     <Card title="Your password">
       <form className="stack" onSubmit={save}>
         <Field label="Current password" htmlFor="s-cur"><input id="s-cur" type="password" value={form.currentPassword} onChange={(e) => setForm({ ...form, currentPassword: e.target.value })} /></Field>
-        <Field label="New password" htmlFor="s-new" help="At least 8 characters."><input id="s-new" type="password" value={form.newPassword} onChange={(e) => setForm({ ...form, newPassword: e.target.value })} /></Field>
+        <Field label="New password" htmlFor="s-new" help="At least 12 characters."><input id="s-new" type="password" value={form.newPassword} onChange={(e) => setForm({ ...form, newPassword: e.target.value })} /></Field>
         <ErrorAlert error={error} />
         <div><button className="btn btn-primary" type="submit" disabled={!form.currentPassword || !form.newPassword}>Change password</button></div>
       </form>
@@ -39,7 +39,7 @@ function UsersCard() {
     try { await api.patch(`/users/${u._id}`, patch); reload(); toast('User updated'); } catch (e) { toast(e.message, 'bad'); }
   };
   return (
-    <Card title="Users" body={false} actions={<button className="btn btn-sm btn-primary" onClick={() => setAdding({ name: '', email: '', password: '', role: 'USER' })}>Add user</button>}>
+    <Card title="Users" body={false} actions={<button className="btn btn-sm btn-primary" onClick={() => setAdding({ name: '', email: '', password: '', role: 'ACCOUNTING' })}>Add user</button>}>
       <ErrorAlert error={error} />
       {loading ? <Loading /> : data && (
         <table>
@@ -49,12 +49,12 @@ function UsersCard() {
               <tr key={u._id}>
                 <td className="strong">{u.name}</td>
                 <td>{u.email}</td>
-                <td>{u.role === 'ADMIN' ? <Badge tone="accent">Administrator</Badge> : 'User'}</td>
+                <td>{u.role === 'ADMIN' ? <Badge tone="accent">Administrator</Badge> : u.role === 'NSM' ? 'NSM' : 'Accounting'}</td>
                 <td>{u.active ? <Badge tone="ok">Active</Badge> : <Badge>Disabled</Badge>}</td>
                 <td className="num">
                   {u._id !== me._id && (
                     <div className="actions" style={{ justifyContent: 'flex-end' }}>
-                      <button className="btn btn-sm" onClick={() => update(u, { role: u.role === 'ADMIN' ? 'USER' : 'ADMIN' })}>{u.role === 'ADMIN' ? 'Make user' : 'Make admin'}</button>
+                      <select aria-label={`Role for ${u.name}`} style={{ width: 140 }} value={u.role} onChange={(e) => update(u, { role: e.target.value })}><option value="ACCOUNTING">Accounting</option><option value="NSM">NSM</option><option value="ADMIN">Administrator</option></select>
                       <button className="btn btn-sm" onClick={() => update(u, { active: !u.active })}>{u.active ? 'Disable' : 'Enable'}</button>
                     </div>
                   )}
@@ -75,8 +75,8 @@ function UsersCard() {
             <Field label="Name" htmlFor="u-name"><input id="u-name" value={adding.name} onChange={(e) => setAdding({ ...adding, name: e.target.value })} /></Field>
             <Field label="Email" htmlFor="u-email"><input id="u-email" type="email" value={adding.email} onChange={(e) => setAdding({ ...adding, email: e.target.value })} /></Field>
             <Field label="Temporary password" htmlFor="u-pw"><input id="u-pw" type="password" value={adding.password} onChange={(e) => setAdding({ ...adding, password: e.target.value })} /></Field>
-            <Field label="Role" htmlFor="u-role" help="Administrators can change divisions, plans and rates.">
-              <select id="u-role" value={adding.role} onChange={(e) => setAdding({ ...adding, role: e.target.value })}><option value="USER">User</option><option value="ADMIN">Administrator</option></select>
+            <Field label="Role" htmlFor="u-role" help="Accounting runs VDPs; NSM resolves assigned operational exceptions; administrators control configuration.">
+              <select id="u-role" value={adding.role} onChange={(e) => setAdding({ ...adding, role: e.target.value })}><option value="ACCOUNTING">Accounting</option><option value="NSM">NSM</option><option value="ADMIN">Administrator</option></select>
             </Field>
             <ErrorAlert error={addError} />
           </div>

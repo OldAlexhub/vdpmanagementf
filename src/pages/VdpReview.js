@@ -671,7 +671,7 @@ export default function VdpReview() {
   return (
     <div className="page">
       <PageHead
-        crumbs={<><Link to="/vdp-history">VDP History</Link> / {v.provider?.name}</>}
+        crumbs={<><Link to="/vdps">VDPs</Link> / {v.provider?.name}</>}
         title={<>{v.provider?.name} <StatusBadge status={vdp.status} /></>}
         sub={`${v.provider?.operatorName || ''} · Route ${(v.provider?.routes || []).join(', ') || '—'} · ${cycleLabel(v.cycle)}`}
         actions={<>
@@ -743,7 +743,7 @@ export default function VdpReview() {
               <FuelCard key={`${vdp._id}-${vdp.view.fuelExpense?.amount ?? ''}`} vdp={vdp} editable={editable} onChanged={(d) => { setData(d); toast('Fuel expense saved'); }} />
             </>}
             <AdjustmentsCard vdp={vdp} types={types.data || []} editable={editable} onChanged={(d) => { setData(d); toast('VDP updated'); }} />
-            <ExplainCalculation calc={v.calculation} settings={v.settings} />
+            <ExplainCalculation calc={v.calculation} settings={v.settings} performance={v.performance} />
           </div>
           <div className="stack">
             <NetCard vdp={vdp} />

@@ -35,7 +35,7 @@ export function StatusBadge({ status, map = VDP_STATUS }) {
 }
 
 export const ActiveBadge = ({ status }) =>
-  status === 'ACTIVE' ? <Badge tone="ok">Active</Badge> : <Badge tone="neutral">Inactive</Badge>;
+  status === 'ACTIVE' ? <Badge tone="ok">Active</Badge> : status === 'DRAFT' ? <Badge tone="warn">Draft</Badge> : <Badge tone="neutral">Archived</Badge>;
 
 export function Card({ title, hint, actions, children, body = true, className = '' }) {
   return (

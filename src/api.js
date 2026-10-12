@@ -12,6 +12,7 @@ export class ApiError extends Error {
 
 async function request(method, url, body) {
   const opts = { method, credentials: 'include', headers: {} };
+  if (!['GET', 'HEAD'].includes(method)) opts.headers['X-VDP-CSRF'] = '1';
   if (body instanceof FormData) opts.body = body;
   else if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json';

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../App';
 import { money } from '../format';
-import { ActiveBadge, Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
+import { ActiveBadge, Alert, Badge, Card, Confirm, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
 
 const FREQUENCIES = {
   WEEKLY: 'Weekly',
@@ -109,6 +109,7 @@ export default function LiftLeases() {
   const canEdit = user.role === 'ADMIN';
   const leases = useLoad(() => api.get('/lift-leases'), []);
   const [editing, setEditing] = useState(null);
+  const [deleting, setDeleting] = useState(null);
   // useLoad starts with an array, and a still-running pre-change API also returns
   // the old array shape. Normalize both so the page can render during rollout.
   const data = Array.isArray(leases.data)
@@ -136,7 +137,7 @@ export default function LiftLeases() {
                     <td>{option.frequency === 'NONE' ? '—' : money(option.amount)}</td>
                     <td>{option.assignedOperatorCount}</td>
                     <td><ActiveBadge status={option.status} /></td>
-                    <td className="num">{canEdit && <button className="btn btn-sm" onClick={() => setEditing(option)}>Edit</button>}</td>
+                    <td className="num">{canEdit && <div className="actions" style={{ justifyContent: 'flex-end' }}><button className="btn btn-sm" onClick={() => setEditing(option)}>Edit</button>{option.assignedOperatorCount === 0 && <button className="btn btn-sm btn-danger" onClick={() => setDeleting(option)}>Delete</button>}</div>}</td>
                   </tr>)}</tbody>
                 </table>
               </div>}
@@ -153,6 +154,11 @@ export default function LiftLeases() {
         )}
       </div>
       {editing && <LeaseOptionModal option={editing.create ? null : editing} divisions={data.divisions} onClose={() => setEditing(null)} onSaved={closeSaved} />}
+      {deleting && <Confirm title={`Delete ${deleting.name}?`} message="This permanently removes the unused lease option." confirmLabel="Delete option" tone="danger" reason="Reason" onClose={() => setDeleting(null)} onConfirm={async (reason) => {
+        await api.post(`/records/lift-lease/${deleting._id}/purge`, { reason, confirmation: 'PURGE' });
+        leases.reload();
+        toast('Lease option deleted');
+      }} />}
     </div>
   );
 }

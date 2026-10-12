@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, downloadFile } from '../api';
 import { useAuth } from '../App';
 import { date, isoDate, rate, num, pct, METRIC_LABELS, PAYMENT_TYPE_LABELS } from '../format';
-import { ActiveBadge, Alert, Badge, Card, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
+import { ActiveBadge, Alert, Badge, Card, Confirm, Empty, ErrorAlert, Field, Loading, Modal, PageHead, useLoad, useToast } from '../components/ui';
 import BulkImport from '../components/BulkImport';
 
 const blankTier = () => ({ minimumPercentage: '', maximumPercentage: '', rate: '' });
@@ -426,7 +426,7 @@ function VersionFields({ form, setForm, showDates = true }) {
             <input id="v-col" value={form.performanceHourColumn} onChange={set('performanceHourColumn')} placeholder="e.g. Slk Time (mins)" />
           </Field>
         )}
-        {!uber && (form.incentiveEnabled || rateCard) && <Field label="TUI fulfillment hours source" htmlFor="v-attainment-metric" help={form.incentiveEnabled ? 'Only hours actually worked inside the operatorâ€™s Compass start/end window may activate a TUI tier.' : 'Hours used to select the attainment rate card.'}>
+        {!uber && (form.incentiveEnabled || rateCard) && <Field label="TUI fulfillment hours source" htmlFor="v-attainment-metric" help={form.incentiveEnabled ? 'Only hours actually worked inside the operator’s Compass start/end window may activate a TUI tier.' : 'Hours used to select the attainment rate card.'}>
           <select id="v-attainment-metric" value={form.attainmentHourMetric} onChange={set('attainmentHourMetric')}>
             {form.incentiveEnabled
               ? <option value="OTHER">Uploaded in-window hours column</option>
@@ -465,7 +465,7 @@ function VersionFields({ form, setForm, showDates = true }) {
       <div className="card card-body">
         <label className="check"><input type="checkbox" checked={form.incentiveEnabled} onChange={(e) => setForm({ ...form, incentiveEnabled: e.target.checked, ...(e.target.checked ? { attainmentHourMetric: 'OTHER', attainmentHourColumn: form.attainmentHourColumn || 'Incentive Hours' } : {}) })} /> TUI (Top-Up Incentive) eligible</label>
         <p className="muted small" style={{ margin: '4px 0 10px 24px' }}>
-          When on, fulfillment is in-window hours divided by contracted hours; the weekly rate comes from the {rateCard ? 'attainment rate cards' : 'incentive tiers'} below. Compass supplies each operatorâ€™s start/end window.
+          When on, fulfillment is in-window hours divided by contracted hours; the weekly rate comes from the {rateCard ? 'attainment rate cards' : 'incentive tiers'} below. Compass supplies each operator’s start/end window.
           Individual providers can still be switched on or off on their profile.
         </p>
         {!rateCard && (form.incentiveEnabled || form.incentiveTiers.length > 0) && (
@@ -592,7 +592,7 @@ function VersionModal({ plan, version, mode, onClose, onSaved }) {
       // Fuel prices belong to the plan; they are saved with the fuel options when the allowance is used.
       const { fuelPrices, ...rules } = form;
       const body = ['SERVICE_MILE_ALLOWANCE', 'PRICE_THRESHOLD_SURCHARGE'].includes(form.fuelMethod) ? { ...rules, fuelPrices } : rules;
-      if (mode === 'create-plan') saved = await api.post('/vdp-plans', { ...meta, version: rules, ...(body.fuelPrices ? { fuelPrices } : {}) });
+      if (mode === 'create-plan') saved = await api.post('/vdp-plans', { ...meta, blueprintId: templateId || undefined, version: rules, ...(body.fuelPrices ? { fuelPrices } : {}) });
       else if (mode === 'add') saved = await api.post(`/vdp-plans/${plan._id}/versions`, body);
       else saved = await api.put(`/vdp-plans/${plan._id}/versions/${version._id}`, body);
       onSaved(saved);
@@ -618,7 +618,7 @@ function VersionModal({ plan, version, mode, onClose, onSaved }) {
                 {(templates.data || []).map((template) => <option key={template.id} value={template.id}>DIV {template.divisionNumber} — {template.name}</option>)}
               </select>
             </Field>
-            {templateId && (() => { const template = templates.data?.find((item) => item.id === templateId); return template ? <p className="muted small" style={{ marginBottom: 0 }}><strong>{template.sourceDocument}</strong> · {template.description}</p> : null; })()}
+            {templateId && (() => { const template = templates.data?.find((item) => item.id === templateId); return template ? <p className="muted small" style={{ marginBottom: 0 }}><strong>{template.sourceDocument}</strong> · {template.variant === 'SIGNED_DOCUMENT' ? 'Signed-document rules' : 'Operational-workbook variant'} · {template.description}{!template.processingEnabled ? ' · Template only; processing is disabled.' : ''}</p> : null; })()}
           </div>
           <div className="form-grid">
             <Field label="Division" htmlFor="p-div">
@@ -759,6 +759,7 @@ export function PlanList() {
 
 export function PlanDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const isAdmin = user.role === 'ADMIN';
   const toast = useToast();
@@ -771,6 +772,7 @@ export function PlanDetail() {
   const [editBusy, setEditBusy] = useState(false);
   const [pricing, setPricing] = useState(false);
   const [downloadingReport, setDownloadingReport] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const downloadPlanReport = async () => {
     setDownloadingReport(true);
@@ -793,6 +795,7 @@ export function PlanDetail() {
             <button className="btn" disabled={downloadingReport} onClick={downloadPlanReport}>{downloadingReport ? 'Preparing PDF...' : 'Executive PDF'}</button>
             {isAdmin && <button className="btn" onClick={() => { setEditError(null); setEditMeta({ name: plan.name, divisionId: plan.divisionId, notes: plan.notes || '', status: plan.status }); }}>Edit plan</button>}
             {isAdmin && <button className="btn btn-primary" onClick={() => setModal({ mode: 'add', version: current })}>New version (rate change)</button>}
+            {isAdmin && plan.status === 'DRAFT' && plan.providerCount === 0 && plan.versions.every((version) => !version.locked) && <button className="btn btn-danger" onClick={() => setDeleting(true)}>Delete unused draft</button>}
           </>
         )}
       />
@@ -802,7 +805,7 @@ export function PlanDetail() {
             <Card key={v._id}
               title={<>Version {v.versionNumber} {v._id === plan.currentVersionId && <Badge tone="ok">Current</Badge>} {v.locked && <Badge tone="outline">Used by approved VDPs</Badge>}</>}
               hint={`Effective ${date(v.effectiveFrom)} – ${v.effectiveTo ? date(v.effectiveTo) : 'open'}`}
-              actions={isAdmin && !v.locked && <button className="btn btn-sm" onClick={() => setModal({ mode: 'edit', version: v })}>Edit</button>}>
+              actions={isAdmin && plan.status === 'DRAFT' && !v.locked && <button className="btn btn-sm" onClick={() => setModal({ mode: 'edit', version: v })}>Edit draft</button>}>
               <div className="kv" style={{ marginBottom: 14 }}>
                 <div><div className="k">Plan / service type</div><div className="v">{v.calculationType === 'UBER' ? 'Uber' : PAYMENT_TYPE_LABELS[v.paymentType]}</div></div>
                 <div><div className="k">{v.calculationType === 'UBER' ? 'Base hourly rate' : 'Base pay'}</div><div className="v">{v.calculationType === 'UBER' ? (v.uberConfig?.rateStructureType === 'HOURLY_BANDS' ? 'Plan hourly bands' : 'Operator profile') : v.rateStructureType === 'RATE_CARD' ? 'Configured rate cards' : <>{rate(v.basePay)}{v.paymentType === 'HOURLY' ? '/hour' : '/trip'}</>}</div></div>
@@ -893,7 +896,7 @@ export function PlanDetail() {
             </Field>
             <Field label="Status" htmlFor="pm-status">
               <select id="pm-status" value={editMeta.status} onChange={(e) => setEditMeta({ ...editMeta, status: e.target.value })}>
-                <option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option>
+                <option value="DRAFT">Draft</option><option value="ACTIVE">Active</option><option value="INACTIVE">Archived</option>
               </select>
             </Field>
             <Field label="Notes" htmlFor="pm-notes"><textarea id="pm-notes" value={editMeta.notes} onChange={(e) => setEditMeta({ ...editMeta, notes: e.target.value })} /></Field>
@@ -901,6 +904,11 @@ export function PlanDetail() {
           </div>
         </Modal>
       )}
+      {deleting && <Confirm title={`Delete ${plan.name}?`} message="Permanent deletion is allowed only for an unused draft with no provider or VDP references." confirmLabel="Delete unused draft" tone="danger" reason="Reason" onClose={() => setDeleting(false)} onConfirm={async (reason) => {
+        await api.post(`/records/plan/${plan._id}/purge`, { reason, confirmation: 'PURGE' });
+        toast('Unused plan deleted');
+        navigate('/configuration/plans');
+      }} />}
     </div>
   );
 }

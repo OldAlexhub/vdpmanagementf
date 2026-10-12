@@ -161,7 +161,7 @@ function PortalStatement() {
             <OperatorsCard calc={v.calculation} perTrip={perTrip} settings={v.settings} />
             <GrossIncomeBreakdown calc={v.calculation} perTrip={perTrip} />
             <AdjustmentList view={v} />
-            <ExplainCalculation calc={v.calculation} settings={v.settings} />
+            <ExplainCalculation calc={v.calculation} settings={v.settings} performance={v.performance} />
           </div>
           <NetCard vdp={vdp} />
         </div>

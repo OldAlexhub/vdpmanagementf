@@ -152,7 +152,37 @@ function UberExplain({ calc }) {
   );
 }
 
-export default function ExplainCalculation({ calc, settings }) {
+const clockLabel = (minutes) => {
+  if (minutes === null || minutes === undefined) return 'Not available';
+  const day = Math.floor(Number(minutes) / 1440);
+  const value = ((Number(minutes) % 1440) + 1440) % 1440;
+  const hour = Math.floor(value / 60);
+  const minute = Math.round(value % 60);
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}${day ? ` +${day} day` : ''}`;
+};
+
+function TuiEvidence({ performance }) {
+  const rows = (performance?.days || []).filter((day) => day.tui);
+  if (!rows.length) return null;
+  return <section className="calc-week calc-payment">
+    <header><div><div className="calc-week-title">TUI source evidence</div><div className="muted small">Only overlap between the observed service interval and the Compass window activates a tier.</div></div></header>
+    <div className="table-wrap"><table className="table-compact">
+      <thead><tr><th>Date</th><th>Route</th><th>Compass window</th><th>First / last Arrived*</th><th className="num">TUI overlap</th><th className="num">Excluded</th></tr></thead>
+      <tbody>{rows.map((day, index) => {
+        const tui = day.tui;
+        return <tr key={`${day.date}-${day.route}-${index}`}>
+          <td>{date(day.date)}</td><td>{day.route}</td>
+          <td>{tui.compassWindow ? `${clockLabel(tui.compassWindow.startMinutes)}–${clockLabel(tui.compassWindow.endMinutes)}` : 'No scheduled Compass window'}</td>
+          <td>{`${clockLabel(tui.observedInterval?.startMinutes)}–${clockLabel(tui.observedInterval?.endMinutes)}`}<div className="muted small">{tui.sourceOperatorName || 'Source operator not supplied'} · {tui.timezone || 'division timezone'}</div></td>
+          <td className="num">{tui.overlapMinutes === null ? 'Needs review' : `${num(Number(tui.overlapMinutes) / 60)} h`}</td>
+          <td className="num">{tui.excludedMinutes === null ? '—' : `${num(Number(tui.excludedMinutes) / 60)} h`}</td>
+        </tr>;
+      })}</tbody>
+    </table></div>
+  </section>;
+}
+
+export default function ExplainCalculation({ calc, settings, performance }) {
   if (!calc) return null;
   const weeks = Array.isArray(calc.weeks) ? calc.weeks : [];
   const uber = calc.calculationType === 'UBER';
@@ -186,6 +216,7 @@ export default function ExplainCalculation({ calc, settings }) {
             </header>
             <StepLedger steps={calc.steps} />
           </section>
+          <TuiEvidence performance={performance} />
           {calc.fuelAllowance && <FuelAllowance fuel={calc.fuelAllowance} overspend={calc.fuelOverspend} />}
         </div>
       )}

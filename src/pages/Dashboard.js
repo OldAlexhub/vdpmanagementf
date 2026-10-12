@@ -1,82 +1,41 @@
 import { Link } from 'react-router-dom';
-import { useState } from 'react';
 import { api } from '../api';
-import { cycleLabel, date, money } from '../format';
-import { Alert, Card, CYCLE_STATUS, ErrorAlert, Loading, PageHead, Stat, StatusBadge, useLoad, VDP_STATUS } from '../components/ui';
-import { DivisionCyclePicker, useDivisionCycle } from '../components/selection';
-import { VdpTable } from './Processing';
+import { date } from '../format';
+import { Badge, Card, Empty, ErrorAlert, Loading, PageHead, Stat, useLoad } from '../components/ui';
+
+const statusTone = (status) => ({ EXCEPTIONS: 'bad', FAILED: 'bad', READY: 'ok', REVIEW: 'info', COMPLETE: 'ok' }[status] || 'warn');
 
 export default function Dashboard() {
-  const sel = useDivisionCycle();
-  const [status, setStatus] = useState('');
-  const { data: s, loading, error } = useLoad(
-    () => (sel.cycleId ? api.get(`/cycles/${sel.cycleId}`) : Promise.resolve(null)),
-    [sel.cycleId],
-  );
-
-  const nextStep = (() => {
-    if (!s) return null;
-    if (!s.performance.loaded) return ['Upload the Performance Report for this cycle.', 'Upload performance'];
-    if (s.performance.unresolvedCount) return [`${s.performance.unresolvedCount} route(s) need review before processing.`, 'Review routes'];
-    if (!s.vdps.total || s.vdps.stale || s.providersWithoutVdp) return ['VDPs need to be processed.', 'Process VDPs'];
-    if (s.vdps.DISPUTED) return [`${s.vdps.DISPUTED} provider(s) reported an issue — auto-approval is paused until you answer.`, 'Review provider issues'];
-    if (s.vdps.NEEDS_REVIEW) return [`${s.vdps.NEEDS_REVIEW} VDP(s) need review.`, 'Review exceptions'];
-    if (s.vdps.READY) return [`${s.vdps.READY} VDP(s) are ready to approve.`, 'Review VDPs'];
-    if (s.vdps.PROCESSED) return [`${s.vdps.PROCESSED} VDP(s) are approved & processed — ready to mark as paid.`, 'Open processed VDPs'];
-    return null;
-  })();
+  const runs = useLoad(() => api.get('/processing-runs', { limit: 12 }), []);
+  const vdps = useLoad(() => api.get('/vdps'), []);
+  const rows = vdps.data || [];
+  const exceptions = rows.filter((row) => ['NEEDS_REVIEW', 'DISPUTED'].includes(row.status));
+  const clean = rows.filter((row) => row.status === 'READY' && !row.stale);
+  const providerIssues = rows.filter((row) => row.status === 'DISPUTED');
 
   return (
     <div className="page">
-      <PageHead title="Dashboard"
-        sub={s ? <>DIV {s.division?.divisionNumber || '—'}{s.division?.name ? ` – ${s.division.name}` : ''} · {cycleLabel(s.cycle)} · payment {date(s.cycle.paymentDate, 'long')} <StatusBadge status={s.cycle.status} map={CYCLE_STATUS} /></> : 'Current VDP cycle at a glance.'} />
-      <div className="filters" style={{ marginBottom: 16 }}>
-        <DivisionCyclePicker sel={sel} />
-        <div className="field">
-          <label htmlFor="dash-status">VDP status</label>
-          <select id="dash-status" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">All statuses</option>
-            {Object.entries(VDP_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-          </select>
+      <PageHead title="Home" sub="Resume current work and act on the small number of records that need attention."
+        actions={<Link className="btn btn-primary" to="/processing">Start or resume processing</Link>} />
+      <ErrorAlert error={runs.error || vdps.error} />
+      {(runs.loading || vdps.loading) && !runs.data ? <Loading /> : <div className="stack">
+        <div className="grid grid-3">
+          <Link className="stat-link" to="/vdps?status=NEEDS_REVIEW"><Stat label="Exceptions" value={exceptions.length} tone={exceptions.length ? 'bad' : 'ok'} note="Calculation or provider review" /></Link>
+          <Link className="stat-link" to="/vdps?status=READY"><Stat label="Ready to approve" value={clean.length} tone={clean.length ? 'ok' : undefined} note="Clean, current VDPs" /></Link>
+          <Link className="stat-link" to="/vdps?status=DISPUTED"><Stat label="Provider issues" value={providerIssues.length} tone={providerIssues.length ? 'warn' : undefined} note="Awaiting a response" /></Link>
         </div>
-      </div>
-      {!sel.loading && !sel.divisions.length && (
-        <Alert tone="info" action={<Link className="btn btn-sm" to="/divisions">Set up divisions</Link>}>Start by creating a division, its VDP plans and providers.</Alert>
-      )}
-      <ErrorAlert error={error} />
-      {loading && !s ? <Loading /> : s && (
-        <div className="stack">
-          {nextStep && (
-            <Alert tone="warn" action={<Link className="btn btn-sm btn-primary" to={nextStep[1] === 'Review exceptions' ? '/vdp-history?status=NEEDS_REVIEW' : nextStep[1] === 'Review provider issues' ? '/vdp-history?status=DISPUTED' : nextStep[1] === 'Review VDPs' ? '/vdp-history?status=READY' : nextStep[1] === 'Open processed VDPs' ? '/vdp-history?status=PROCESSED' : '/processing'}>{nextStep[1]}</Link>}>
-              <strong>Next step:</strong> {nextStep[0]}
-            </Alert>
-          )}
-          <div className="grid grid-3">
-            <Stat label="Providers expected" value={s.providersExpected} note="Active in this division" />
-            <Stat label="Performance loaded" value={s.performance.loaded ? 'Yes' : 'No'} tone={s.performance.loaded ? 'ok' : 'bad'}
-              note={s.performance.loaded ? s.performance.fileName : 'Report not uploaded'} />
-            <Stat label="VDPs calculated" value={`${s.vdps.calculated} / ${s.providersExpected}`} />
-          </div>
-          <div className="grid grid-3">
-            <Link className="stat-link" to="/vdp-history?status=NEEDS_REVIEW"><Stat label="Needs review" value={s.vdps.NEEDS_REVIEW} tone={s.vdps.NEEDS_REVIEW ? 'bad' : undefined} /></Link>
-            <Link className="stat-link" to="/vdp-history?status=READY"><Stat label="Ready" value={s.vdps.READY} /></Link>
-            <Link className="stat-link" to="/vdp-history?status=APPROVED"><Stat label="Awaiting provider" value={s.vdps.APPROVED} tone={s.vdps.APPROVED ? 'warn' : undefined} note="Sent to provider portal" /></Link>
-          </div>
-          <div className="grid grid-3">
-            <Link className="stat-link" to="/vdp-history?status=PROCESSED"><Stat label="Approved & processed" value={s.vdps.PROCESSED} tone={s.vdps.PROCESSED ? 'ok' : undefined} note="Ready to mark paid" /></Link>
-            <Link className="stat-link" to="/vdp-history?status=DISPUTED"><Stat label="Provider issues" value={s.vdps.DISPUTED} tone={s.vdps.DISPUTED ? 'bad' : undefined} note="Auto-approval paused" /></Link>
-            <Link className="stat-link" to="/vdp-history?status=PAID"><Stat label="Paid" value={s.vdps.PAID} /></Link>
-          </div>
-          <div className="grid grid-3">
-            <Stat label="Gross VDP" value={money(s.totals.gross)} />
-            <Stat label="Total deductions" value={money(s.totals.deductions)} note={`Additions ${money(s.totals.additions)}`} />
-            <Stat label="Net VDP" value={money(s.totals.net)} tone="ok" />
-          </div>
-          <Card title="VDPs" body={false} actions={<Link className="btn btn-sm" to="/processing">Open processing</Link>}>
-            <VdpTable cycleId={s.cycle._id} status={status} search="" refreshKey={0} />
-          </Card>
-        </div>
-      )}
+        <Card title="Current processing runs" hint="Uploads and position are saved on the server" actions={<Link className="btn btn-sm" to="/processing">Open processing</Link>} body={false}>
+          {!(runs.data || []).length ? <Empty title="No active processing runs" actions={<Link className="btn btn-primary" to="/processing">Begin a cycle</Link>}>Choose a division and upload its first core dataset.</Empty> : <div className="run-list">
+            {(runs.data || []).map((run) => <Link key={run._id} className="run-row" to={`/processing?cycleId=${run.cycleId?._id || run.cycleId}&runId=${run._id}`}>
+              <div><strong>DIV {run.divisionId?.divisionNumber} — {run.divisionId?.name}</strong><div className="muted small">{date(run.cycleId?.cycleStart)}–{date(run.cycleId?.cycleEnd)} · Last opened {date(run.lastOpenedAt)}</div></div>
+              <div className="run-progress"><span>{String(run.currentSection || 'DIVISION').replaceAll('_', ' ').toLowerCase()}</span><Badge tone={statusTone(run.status)}>{run.status}</Badge></div>
+            </Link>)}
+          </div>}
+        </Card>
+        {!!exceptions.length && <Card title="Next exceptions" hint="Clean providers are never held behind these records" actions={<Link className="btn btn-sm" to="/vdps?status=NEEDS_REVIEW">Open exception queue</Link>} body={false}>
+          <div className="run-list">{exceptions.slice(0, 6).map((row) => <Link key={row._id} className="run-row" to={`/vdps?selected=${row._id}`}><div><strong>{row.provider?.name}</strong><div className="muted small">{row.exceptions?.[0]?.message || 'Provider issue requires review'}</div></div><Badge tone="bad">Review</Badge></Link>)}</div>
+        </Card>}
+      </div>}
     </div>
   );
 }

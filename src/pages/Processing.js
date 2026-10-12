@@ -429,6 +429,8 @@ function Division3UploadCard({ kind, summary, division, onChanged }) {
 
 function DivisionSourceUploadCard({ dataset, summary, division, onChanged }) {
   const input = useRef();
+  const replacementInput = useRef();
+  const replacementTarget = useRef('');
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(null);
@@ -436,7 +438,7 @@ function DivisionSourceUploadCard({ dataset, summary, division, onChanged }) {
   const files = dataset.files || [];
   const selectedDivision = summary?.division || division;
 
-  const upload = async (selectedFiles) => {
+  const upload = async (selectedFiles, supersedesId = '') => {
     if (!selectedFiles?.length) return;
     setBusy(true);
     setError(null);
@@ -444,13 +446,19 @@ function DivisionSourceUploadCard({ dataset, summary, division, onChanged }) {
     if (summary?.cycle?._id) form.append('cycleId', summary.cycle._id);
     else form.append('divisionId', selectedDivision._id);
     form.append('datasetType', dataset.id);
+    if (supersedesId) form.append('supersedesId', supersedesId);
     [...selectedFiles].forEach((file) => form.append('files', file));
     try {
       const result = await api.post('/division-source-imports', form);
+      const duplicates = result.files.filter((file) => file.duplicate);
+      if (duplicates.length) toast(`${duplicates.map((file) => file.fileName).join(', ')} is already active; no duplicate was created.`);
+      else if (supersedesId) toast('Replacement validated and activated');
       onChanged(result.files, result.cycleId);
     } catch (e) { setError(e); }
     setBusy(false);
     if (input.current) input.current.value = '';
+    if (replacementInput.current) replacementInput.current.value = '';
+    replacementTarget.current = '';
   };
 
   const remove = async (file) => {
@@ -476,6 +484,7 @@ function DivisionSourceUploadCard({ dataset, summary, division, onChanged }) {
     <div className="card-body stack">
       <div className="upload-drop">
         <input ref={input} type="file" accept={(dataset.accept || []).join(',')} multiple={dataset.multiple !== false} hidden onChange={(event) => upload(event.target.files)} />
+        <input ref={replacementInput} type="file" accept={(dataset.accept || []).join(',')} hidden onChange={(event) => upload(event.target.files, replacementTarget.current)} />
         <button className="btn btn-primary" disabled={busy || Boolean(removing)} onClick={() => input.current.click()}>{busy ? 'Validating…' : `Upload ${dataset.title}`}</button>
         <div className="muted small" style={{ marginTop: 8 }}>{(dataset.accept || []).join(', ')} · {dataset.multiple === false ? 'one file' : 'multiple files allowed'}{!summary?.cycle && ' · source dates identify the VDP period'}</div>
       </div>
@@ -491,7 +500,10 @@ function DivisionSourceUploadCard({ dataset, summary, division, onChanged }) {
         <td className="num">{file.rowCount}</td>
         <td className="small">{file.dataRange?.from ? `${date(file.dataRange.from, 'md')} – ${date(file.dataRange.to, 'md')}` : '—'}</td>
         <td className="small">{dateTime(file.uploadedAt)}<div className="muted">{file.uploadedBy?.name}</div></td>
-        <td className="num">{['ACTIVE', 'INVALID'].includes(file.status) && <button className="btn btn-ghost btn-sm" disabled={Boolean(removing)} onClick={() => remove(file)}>{removing === file._id ? 'Removing…' : file.validationStatus === 'INVALID' ? 'Clear' : 'Remove'}</button>}</td>
+        <td className="num"><div className="actions" style={{ justifyContent: 'flex-end' }}>
+          {file.status === 'ACTIVE' && <button className="btn btn-sm" disabled={busy || Boolean(removing)} onClick={() => { replacementTarget.current = file._id; replacementInput.current?.click(); }}>Replace</button>}
+          {['ACTIVE', 'INVALID'].includes(file.status) && <button className="btn btn-ghost btn-sm" disabled={Boolean(removing)} onClick={() => remove(file)}>{removing === file._id ? 'Removing…' : file.validationStatus === 'INVALID' ? 'Clear' : 'Remove'}</button>}
+        </div></td>
       </tr>)}</tbody>
     </table></div>}
   </Card>;
@@ -517,11 +529,12 @@ function Division3DriverRow({ match, providers, processingDivisions, cycleId, on
     setBusy('');
   };
   const setAside = async () => {
-    if (!window.confirm(`Set aside ${match.sourceName} (${match.service}) for this VDP cycle? Their uploaded rows will be excluded so you can process everyone else.`)) return;
+    const reason = window.prompt(`Why is ${match.sourceName} (${match.service}) being set aside for this VDP cycle?`);
+    if (!reason?.trim()) return;
     setBusy('aside');
     setError(null);
     try {
-      await api.post('/division3-driver-exclusions', { cycleId, sourceName: match.sourceName, service: match.service });
+      await api.post('/division3-driver-exclusions', { cycleId, sourceName: match.sourceName, service: match.service, reason: reason.trim() });
       await onChanged();
     } catch (e) { setError(e); }
     setBusy('');
@@ -669,8 +682,6 @@ function RoutesCard({ summary, onChanged }) {
   );
 }
 
-const TABS = [['', 'All'], ['NEEDS_REVIEW', 'Needs review'], ['READY', 'Ready'], ['APPROVED', 'Awaiting provider'], ['DISPUTED', 'Provider issues'], ['PROCESSED', 'Processed'], ['PAID', 'Paid']];
-
 export function VdpTable({ cycleId, status, search, refreshKey }) {
   const navigate = useNavigate();
   const { data, loading, error } = useLoad(() => api.get('/vdps', { cycleId, status, search }), [cycleId, status, search, refreshKey]);
@@ -720,8 +731,8 @@ const PIPELINE_STEPS = [
   'Division',
   'Required data',
   'Additional data',
-  'Validate & process',
-  'Review VDPs',
+  'Validation',
+  'Results',
 ];
 
 function PipelineNav({ step, enabled, onSelect }) {
@@ -747,10 +758,9 @@ export default function Processing() {
   const processingGroups = processingGroupsLoad.data || [];
   const toast = useToast();
   const [params, setParams] = useSearchParams();
-  const status = params.get('status') || '';
   const [step, setStep] = useState(1);
-  const [cycleId, setCycleId] = useState('');
-  const [search, setSearch] = useState('');
+  const [cycleId, setCycleId] = useState(() => params.get('cycleId') || '');
+  const [runId, setRunId] = useState(() => params.get('runId') || '');
   const [processing, setProcessing] = useState(false);
   const [processError, setProcessError] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -813,14 +823,26 @@ export default function Processing() {
     setSelectedDivisionIds(ids);
     setStartFresh(false);
     sel.setDivisionId(primaryId);
+    setRunId('');
+    setParams((current) => { current.set('divisionId', primaryId); current.delete('cycleId'); current.delete('runId'); return current; });
   };
 
   useEffect(() => {
-    setCycleId('');
+    const linkedDivisionId = params.get('divisionId');
+    if (linkedDivisionId && sel.divisions.some((division) => division._id === linkedDivisionId) && sel.divisionId !== linkedDivisionId) {
+      sel.setDivisionId(linkedDivisionId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel.divisions.length]);
+
+  useEffect(() => {
+    const linkedCycleId = params.get('cycleId') || '';
+    if (linkedCycleId) setCycleId(linkedCycleId);
+    else setCycleId('');
     setStep(1);
     setStartFresh(false);
     setProcessError(null);
-  }, [sel.divisionId]);
+  }, [sel.divisionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (startFresh || cycleId || sel.cyclesLoading || !selectedDivision || !sel.cycles.length) return;
@@ -842,6 +864,10 @@ export default function Processing() {
     setStartFresh(false);
     setCycleId(id);
     sel.setCycleId(id);
+    api.post('/processing-runs', { cycleId: id }).then((run) => {
+      setRunId(run._id);
+      setParams((current) => { current.set('divisionId', selectedDivision?._id || ''); current.set('cycleId', id); current.set('runId', run._id); return current; }, { replace: true });
+    }).catch(setProcessError);
     refresh();
     if (message) toast(message);
   };
@@ -869,8 +895,11 @@ export default function Processing() {
     setProcessing(true);
     setProcessError(null);
     try {
-      const result = await api.post('/vdps/process', { cycleId });
-      toast(`${result.processed} VDP(s) calculated · ${result.ready} ready · ${result.needsReview} need review${result.skippedLocked ? ` · ${result.skippedLocked} approved left unchanged` : ''}`);
+      const run = runId ? { _id: runId } : await api.post('/processing-runs', { cycleId });
+      if (!runId) setRunId(run._id);
+      const response = await api.post(`/processing-runs/${run._id}/process`);
+      const result = response.lastResult || {};
+      toast(`${result.processed || 0} VDP(s) calculated · ${result.ready || 0} ready · ${result.needsReview || 0} need review${result.intakeExceptions ? ` · ${result.intakeExceptions} unmatched source record(s) set aside from clean providers` : ''}`);
       refresh();
     } catch (e) {
       setProcessError(e);
@@ -890,7 +919,8 @@ export default function Processing() {
   const division2 = String(selectedDivision?.divisionNumber || '').trim() === '2';
   const division12 = String(selectedDivision?.divisionNumber || '').trim() === '12';
   const division3 = selectedDivisions.some(isDivision3Division);
-  const sourceDatasets = divisionSources ? Object.values(divisionSources.datasets || {}) : (sourceContractLoad.data?.datasets || []);
+  const sourceDatasets = (divisionSources ? Object.values(divisionSources.datasets || {}) : (sourceContractLoad.data?.datasets || []))
+    .filter((dataset) => dataset.applicable !== false);
   const requiredSourceDatasets = sourceDatasets.filter((dataset) => dataset.stage === 'REQUIRED');
   const additionalSourceDatasets = sourceDatasets.filter((dataset) => dataset.stage === 'ADDITIONAL');
   const genericSourcesConfigured = Boolean(divisionSources?.configured || sourceContractLoad.data?.configured);
@@ -902,35 +932,53 @@ export default function Processing() {
   const additionalDataReady = Boolean(summary) && (division3
     ? division3Data?.sources?.DIV3_ADA_FARE?.ready && (!requirements.tollsRequired || uberTolls?.ready)
     : (!requirements.divisionSourcesRequired || divisionSources?.additionalReady) && (!requirements.tollsRequired || uberTolls?.ready));
-  const standardReady = Boolean(summary) && (!(requirements.standardPerformanceRequired || sourceRoutesRequired) || (perf?.loaded && !perf.unresolvedCount));
+  const standardReady = Boolean(summary) && (!(requirements.standardPerformanceRequired || sourceRoutesRequired) || perf?.loaded);
   const uberReady = Boolean(summary) && (uber?.loaded
-    ? (uber?.ready ?? true) && !uber.unresolvedCount
+    ? (uber?.ready ?? true)
     : !requirements.uberRequired);
-  const division3Ready = !division3 || summary?.providersExpected === 0 || !division3Data?.unresolvedCount;
+  const division3Ready = !division3 || summary?.providersExpected === 0 || division3Data?.requiredReady;
   const sourceProcessingReady = !requirements?.divisionSourcesRequired || divisionSources?.processingSupported;
   const canProcess = requiredDataLoaded && standardReady && uberReady && additionalDataReady && division3Ready && sourceProcessingReady;
   const processed = Boolean(v?.calculated);
   const enabledSteps = [true, selectedDivisionIds.length > 0, requiredDataLoaded, requiredDataLoaded && additionalDataReady, processed];
+
+  useEffect(() => {
+    if (!cycleId || runId) return;
+    api.post('/processing-runs', { cycleId }).then((run) => {
+      setRunId(run._id);
+      setParams((current) => { current.set('cycleId', cycleId); current.set('runId', run._id); return current; }, { replace: true });
+    }).catch(setProcessError);
+  }, [cycleId, runId, setParams]);
+
+  useEffect(() => {
+    const summaryDivisionId = summary?.division?._id;
+    if (summaryDivisionId && summaryDivisionId !== sel.divisionId) sel.setDivisionId(summaryDivisionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summary?.division?._id]);
+
+  useEffect(() => {
+    setStep(processed ? 5 : requiredDataLoaded && additionalDataReady ? 4 : requiredDataLoaded ? 3 : selectedDivisionIds.length ? 2 : 1);
+  }, [processed, requiredDataLoaded, additionalDataReady, selectedDivisionIds.length]);
 
   const summaryDivisions = summary?.processingDivisions?.length ? summary.processingDivisions : summary?.division ? [summary.division] : [];
   const summaryDivisionLabel = summaryDivisions.map((division) => `DIV ${division.divisionNumber} – ${division.name}`).join(' + ');
 
   const pageSub = summary
     ? <>{summaryDivisionLabel} · {cycleLabel(summary.cycle)} · payment {date(summary.cycle.paymentDate)} <StatusBadge status={summary.cycle.status} map={CYCLE_STATUS} /></>
-    : step === 1 ? 'Start by selecting a division or saved processing group.' : 'Upload source data and its dates will identify the VDP pay period.';
+    : selectedDivision ? 'Upload the first core dataset and its dates will identify the VDP pay period.' : 'Start by selecting a division or saved processing group.';
 
   return (
     <div className="page">
       <PageHead title="VDP Processing" sub={pageSub}
-        actions={step === 5 && summary && v.total > 0 && <>
+        actions={summary && v.total > 0 && <>
           <button className="btn" onClick={() => downloadFile(`/exports/cycles/${summary.cycle._id}.pdf`).catch((e) => toast(e.message, 'bad'))}>Payment register (PDF)</button>
           <button className="btn" onClick={() => downloadFile(`/exports/cycles/${summary.cycle._id}.xlsx`).catch((e) => toast(e.message, 'bad'))}>Export to Excel</button>
         </>} />
-      <PipelineNav step={step} enabled={enabledSteps} onSelect={setStep} />
+      <PipelineNav step={step} enabled={enabledSteps} onSelect={(number) => document.getElementById(`processing-section-${number}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })} />
       <ErrorAlert error={error} />
 
-      {step === 1 && (
-        <Card title="Select a division or processing group" hint="Division linkage is managed in Settings. Grouped divisions appear here as one VDP program.">
+      <section id="processing-section-1" className="processing-section">
+        <Card title="1. Division" hint="Division linkage is managed in Configuration. Grouped divisions appear here as one VDP program.">
           {sel.loading ? <Loading /> : <div className="stack">
             <ErrorAlert error={processingGroupsLoad.error} />
             <Field label="VDP program" htmlFor="processing-program">
@@ -949,13 +997,13 @@ export default function Processing() {
             {selectedDivisions.length > 0 && <div className="explain"><strong>{selectedDivisions.map((division) => `DIV ${division.divisionNumber}`).join(' + ')}</strong><div className="muted small">{selectedDivisions.reduce((total, division) => total + Number(division.activeProviders || 0), 0)} active provider(s) · {selectedDivisions.reduce((total, division) => total + Number(division.activePlans || 0), 0)} active VDP plan(s)</div></div>}
             {sel.cyclesLoading && <Loading text="Checking generated VDP periods…" />}
             {!sel.cyclesLoading && !sel.cycles.length && selectedDivision && <Alert tone="info" action={<Link className="btn btn-sm" to="/cycles">Go to Cycles</Link>}>This division has no generated VDP periods. Generate periods before uploading data.</Alert>}
-            <div className="actions" style={{ justifyContent: 'flex-end' }}><button className="btn btn-primary" disabled={!selectedDivisionIds.length || sel.cyclesLoading || !sel.cycles.length} onClick={() => setStep(2)}>Next: required data</button></div>
           </div>}
         </Card>
-      )}
+      </section>
 
-      {step === 2 && selectedDivision && (
-        <div className="stack">
+      {selectedDivision && (
+        <section id="processing-section-2" className="processing-section stack">
+          <h2>2. Required data</h2>
           {!summary && <Alert tone="info">Upload the first core dataset for DIV {selectedDivision.divisionNumber}. Its source dates will select the matching generated VDP period automatically. After that, this step will show the exact remaining requirements for that period.</Alert>}
           {loading && cycleId ? <Loading text="Loading identified VDP period…" /> : !summary ? <>
             {division3 && <>
@@ -977,30 +1025,30 @@ export default function Processing() {
             {(requirements.uberRequired || division3) && <UberUploadCard summary={summary} division={selectedDivision} onChanged={uberChanged} showMatching={false} />}
             {!division3 && !requirements.divisionSourcesRequired && !requirements.uberRequired && <Alert tone="warn"><strong>No source-file contract is configured for this division.</strong> Processing remains disabled until representative raw files define the accepted schemas.</Alert>}
           </>}
-          <div className="pipeline-actions"><button className="btn" onClick={() => setStep(1)}>Back</button><button className="btn btn-primary" disabled={!requiredDataLoaded} onClick={() => setStep(3)}>Next: additional data</button></div>
-        </div>
+        </section>
       )}
 
-      {step === 3 && summary && (
-        <div className="stack">
+      {summary && (
+        <section id="processing-section-3" className="processing-section stack">
+          <h2>3. Additional data</h2>
           {division3 ? <>
             <Division3UploadCard kind="DIV3_ADA_FARE" summary={summary} division={selectedDivision} onChanged={division3Changed} />
             <Division3UploadCard kind="DIV3_RETURNED_FARE" summary={summary} division={selectedDivision} onChanged={division3Changed} />
-            {requirements.tollsRequired && <UberTollUploadCard summary={summary} onChanged={reload} />}
+            {requirements.tollsAvailable && <UberTollUploadCard summary={summary} onChanged={reload} />}
             <Alert tone="info">Returned fare reconciliation does not block this step. Missing collection detail stays visible as an NSM-pending review item and must be completed before final Accounting approval.</Alert>
           </> : <>
             {additionalSourceDatasets.map((dataset) => <DivisionSourceUploadCard key={dataset.id} dataset={dataset} summary={summary} division={selectedDivision} onChanged={divisionSourceChanged} />)}
-            {requirements.tollsRequired && <UberTollUploadCard summary={summary} onChanged={reload} />}
+            {requirements.tollsAvailable && <UberTollUploadCard summary={summary} onChanged={reload} />}
             {!additionalSourceDatasets.length && !requirements.tollsRequired && <Card title="Additional datasets" hint="Supplemental inputs for this division and pay period.">
               <Empty title="No additional datasets configured for this division">Nothing additional is required for this division's current flow.</Empty>
             </Card>}
           </>}
-          <div className="pipeline-actions"><button className="btn" onClick={() => setStep(2)}>Back</button><button className="btn btn-primary" disabled={!additionalDataReady} onClick={() => setStep(4)}>Next: validate data</button></div>
-        </div>
+        </section>
       )}
 
-      {step === 4 && summary && (
-        <div className="stack">
+      {summary && (
+        <section id="processing-section-4" className="processing-section stack">
+          <h2>4. Validation & processing</h2>
           <div className="grid grid-3">
             <Stat label="Providers expected" value={summary.providersExpected} note="Active providers in division" />
             <Stat label="Required datasets" value={requiredDataLoaded && additionalDataReady ? 'Uploaded' : 'Missing'} tone={requiredDataLoaded && additionalDataReady ? 'ok' : 'bad'} note={division3 ? 'ADA · GoLink · ADA fare (Uber optional)' : requirements.divisionSourcesRequired ? `${sourceDatasets.filter((dataset) => dataset.required).length} division-specific dataset(s)` : `${requirements.uberProviderCount} Uber provider(s)`} />
@@ -1017,7 +1065,7 @@ export default function Processing() {
             </div>
           </Card>}
           <Card title="Process VDPs" hint="Calculates every active provider’s VDP from the validated datasets, plan, and provider profile. Approved VDPs are never changed."
-            actions={<button className="btn btn-primary" disabled={!canProcess || processing} onClick={process}>{processing ? 'Processing…' : v.total ? 'Re-process VDPs' : 'Process VDPs'}</button>}>
+            actions={<button className="btn btn-primary" disabled={!canProcess || processing} onClick={process}>{processing ? 'Processing…' : 'Process ready providers'}</button>}>
             {requirements.standardPerformanceRequired && !perf.loaded && <Alert tone="warn">Upload the required Performance Report first.</Alert>}
             {requirements.standardPerformanceRequired && perf.loaded && perf.unresolvedCount > 0 && <Alert tone="warn">Resolve the routes that need review above before processing.</Alert>}
             {sourceRoutesRequired && perf.loaded && perf.unresolvedCount > 0 && <Alert tone="warn">Resolve the normalized DIV {selectedDivision.divisionNumber} routes that need review above before processing.</Alert>}
@@ -1033,32 +1081,30 @@ export default function Processing() {
             {processError && <ErrorAlert error={processError} />}
             {canProcess && !v.stale && !processError && <p className="muted small">{v.total ? `${v.total} VDPs: ${v.NEEDS_REVIEW} need review and ${v.READY} are ready.` : 'Validation passed. Ready to process.'}</p>}
           </Card>
-          <div className="pipeline-actions"><button className="btn" onClick={() => setStep(3)}>Back</button><button className="btn btn-primary" disabled={!processed} onClick={() => setStep(5)}>Next: review VDPs</button></div>
-        </div>
+        </section>
       )}
 
-      {step === 5 && summary && (
-        <div className="stack">
+      {summary && processed && (
+        <section id="processing-section-5" className="processing-section stack">
+          <h2>5. Results</h2>
           <div className="grid grid-4">
             <Stat label="Providers expected" value={summary.providersExpected} />
             <Stat label="Calculated" value={v.calculated} tone={v.calculated ? 'ok' : undefined} />
             <Stat label="Needs review" value={v.NEEDS_REVIEW} tone={v.NEEDS_REVIEW ? 'bad' : undefined} />
             <Stat label="Approved" value={`${v.APPROVED + v.DISPUTED + v.PROCESSED + v.PAID} / ${v.total || summary.providersExpected}`} note={`${v.APPROVED} awaiting provider · ${v.DISPUTED} issues · ${v.PROCESSED} to pay`} />
           </div>
-          <Card title="Review VDPs" body={false} actions={<>
-            <div className="segmented" role="tablist">{TABS.map(([key, label]) => <button key={key} className={status === key ? 'on' : ''} onClick={() => setParams(key ? { status: key } : {})}>{label}{key && v[key] ? ` (${v[key]})` : ''}</button>)}</div>
-            <input aria-label="Search VDPs" style={{ width: 200 }} placeholder="Search provider or route" value={search} onChange={(event) => setSearch(event.target.value)} />
-          </>}>
-            <VdpTable cycleId={summary.cycle._id} status={status} search={search} refreshKey={refreshKey} />
+          <Card title="Provider results" hint="Review, approve, processed, paid, and historical statements all live in VDPs."
+            actions={<Link className="btn btn-primary" to={`/vdps?cycleId=${summary.cycle._id}${v.NEEDS_REVIEW ? '&status=NEEDS_REVIEW' : ''}`}>{v.NEEDS_REVIEW ? `Review ${v.NEEDS_REVIEW} exception(s)` : 'Open VDP queue'}</Link>}>
+            <p><strong>{v.READY}</strong> clean VDP(s) ready for bulk approval · <strong>{v.NEEDS_REVIEW}</strong> exception(s) · <strong>{v.PROCESSED + v.PAID}</strong> processed/paid.</p>
           </Card>
           {v.calculated > 0 && <div className="grid grid-3">
             <Stat label="Gross VDP" value={money(summary.totals.gross)} />
             <Stat label="Total deductions" value={money(summary.totals.deductions)} note={`Additions ${money(summary.totals.additions)}`} />
             <Stat label="Net VDP" value={money(summary.totals.net)} tone="ok" />
           </div>}
-          <div className="pipeline-actions"><button className="btn" onClick={() => setStep(4)}>Back to validation</button><button className="btn" onClick={() => { setStartFresh(true); setCycleId(''); sel.setCycleId(''); setStep(1); }}>Start another division or period</button></div>
+          <div className="pipeline-actions"><button className="btn" onClick={() => { setStartFresh(true); setCycleId(''); setRunId(''); sel.setCycleId(''); setParams({}); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Start another division or period</button></div>
           <p className="muted small">Status legend: {Object.values(VDP_STATUS).map((item) => item.label).join(' → ')}</p>
-        </div>
+        </section>
       )}
     </div>
   );

@@ -1,12 +1,12 @@
-import { createContext, useContext, useEffect, useState } from 'react';
-import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import { createContext, useContext, useEffect, useLayoutEffect, useState } from 'react';
+import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from './api';
 import { Loading, ToastProvider } from './components/ui';
 import { AuthScreen } from './pages/Auth';
 import Dashboard from './pages/Dashboard';
 import Processing from './pages/Processing';
 import VdpReview from './pages/VdpReview';
-import VdpHistory from './pages/VdpHistory';
+import Vdps from './pages/Vdps';
 import { ProviderList, ProviderProfile, ProviderEdit } from './pages/Providers';
 import Divisions from './pages/Divisions';
 import { PlanList, PlanDetail } from './pages/Plans';
@@ -15,22 +15,31 @@ import Settings from './pages/Settings';
 import Reports from './pages/Reports';
 import LiftLeases from './pages/LiftLeases';
 import PortalShell from './pages/Portal';
+import Configuration from './pages/Configuration';
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
 
 const NAV = [
-  ['/', 'Dashboard', '◧'],
-  ['/processing', 'VDP Processing', '▶'],
-  ['/vdp-history', 'VDP History', '◷'],
-  ['/reports', 'Reports', '▥'],
+  ['/', 'Home', '⌂'],
+  ['/processing', 'Processing', '▶'],
+  ['/vdps', 'VDPs', '▣'],
   ['/providers', 'Providers', '◉'],
-  ['/lift-leases', 'Lift Leases', '$'],
-  ['/divisions', 'Divisions', '▦'],
-  ['/plans', 'VDP Plans', '$'],
-  ['/cycles', 'Cycles', '◷'],
-  ['/settings', 'Settings', '⚙'],
+  ['/reports', 'Reports', '▥'],
+  ['/configuration', 'Configuration', '⚙'],
 ];
+
+function RouteScrollMemory() {
+  const location = useLocation();
+  useLayoutEffect(() => {
+    const key = `vdp.scroll:${location.pathname}${location.search}`;
+    let top = 0;
+    try { top = Number(sessionStorage.getItem(key) || 0); } catch { /* storage may be unavailable */ }
+    requestAnimationFrame(() => window.scrollTo(0, top));
+    return () => { try { sessionStorage.setItem(key, String(window.scrollY)); } catch { /* storage may be unavailable */ } };
+  }, [location.key, location.pathname, location.search]);
+  return null;
+}
 
 function Shell({ user, onLogout }) {
   return (
@@ -49,27 +58,36 @@ function Shell({ user, onLogout }) {
         </nav>
         <div className="sidebar-foot">
           <div style={{ color: '#fff', fontWeight: 600 }}>{user.name}</div>
-          <div style={{ marginBottom: 6 }}>{user.role === 'ADMIN' ? 'Administrator' : 'User'}</div>
+          <div style={{ marginBottom: 6 }}>{user.role === 'ADMIN' ? 'Administrator' : user.role === 'NSM' ? 'NSM' : 'Accounting'}</div>
           <button type="button" onClick={onLogout}>Sign out</button>
         </div>
       </aside>
       <main className="main">
+        <RouteScrollMemory />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/processing" element={<Processing />} />
-          <Route path="/vdp-history" element={<VdpHistory />} />
+          <Route path="/vdps" element={<Vdps />} />
+          <Route path="/vdp-history" element={<Navigate to="/vdps" replace />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/vdps/:id" element={<VdpReview />} />
           <Route path="/providers" element={<ProviderList />} />
           <Route path="/providers/new" element={<ProviderEdit />} />
           <Route path="/providers/:id" element={<ProviderProfile />} />
           <Route path="/providers/:id/edit" element={<ProviderEdit />} />
-          <Route path="/lift-leases" element={<LiftLeases />} />
-          <Route path="/divisions" element={<Divisions />} />
+          <Route path="/configuration" element={<Configuration />} />
+          <Route path="/configuration/lift-leases" element={<LiftLeases />} />
+          <Route path="/configuration/divisions" element={<Divisions />} />
+          <Route path="/configuration/plans" element={<PlanList />} />
+          <Route path="/configuration/plans/:id" element={<PlanDetail />} />
+          <Route path="/configuration/cycles" element={<Cycles />} />
+          <Route path="/configuration/system" element={<Settings />} />
+          <Route path="/lift-leases" element={<Navigate to="/configuration/lift-leases" replace />} />
+          <Route path="/divisions" element={<Navigate to="/configuration/divisions" replace />} />
           <Route path="/plans" element={<PlanList />} />
           <Route path="/plans/:id" element={<PlanDetail />} />
-          <Route path="/cycles" element={<Cycles />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/cycles" element={<Navigate to="/configuration/cycles" replace />} />
+          <Route path="/settings" element={<Navigate to="/configuration/system" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
