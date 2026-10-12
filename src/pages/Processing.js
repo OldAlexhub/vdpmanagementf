@@ -291,14 +291,14 @@ function UberTollUploadCard({ summary, onChanged }) {
   };
   return (
     <Card title="Uber toll reimbursements" body={false}
-      hint="Upload the weekly payments_driver CSVs from the Tolls folder. Driver UUID + week connects each reimbursement to the Uber Report."
+      hint="Upload the weekly payments_driver CSV or Excel files from the Tolls folder. Driver UUID + week connects each reimbursement to the Uber Report."
       actions={tolls.ready ? <Badge tone="ok" dot>Both weeks ready</Badge> : <Badge tone="bad" dot>{tolls.missingWeeks?.length ? `${tolls.missingWeeks.length} week(s) missing` : 'Needs attention'}</Badge>}>
       <div className="card-body stack">
         <Alert tone="info">These are driver toll reimbursements added to VDP earnings. They are different from provider toll-transaction deductions.</Alert>
         <div className="upload-drop">
-          <input ref={input} type="file" accept=".csv" multiple hidden onChange={(event) => upload(event.target.files)} />
-          <button className="btn btn-primary" disabled={busy || Boolean(removing)} onClick={() => input.current.click()}>{busy ? 'Validating...' : 'Upload toll CSVs'}</button>
-          <div className="muted small" style={{ marginTop: 8 }}>Select both weekly payments_driver CSV files. The dates in each filename are validated against this VDP period.</div>
+          <input ref={input} type="file" accept=".csv,.xlsx,.xls" multiple hidden onChange={(event) => upload(event.target.files)} />
+          <button className="btn btn-primary" disabled={busy || Boolean(removing)} onClick={() => input.current.click()}>{busy ? 'Validating...' : 'Upload toll files'}</button>
+          <div className="muted small" style={{ marginTop: 8 }}>Select both weekly payments_driver files (.csv, .xlsx, or .xls). The dates in each filename are validated against this VDP period.</div>
         </div>
         {tolls.expectedWeeks?.length > 0 && <div className="actions">
           {tolls.expectedWeeks.map((week) => <Badge key={week} tone={tolls.loadedWeeks?.includes(week) ? 'ok' : 'bad'}>{date(week, 'md')} {tolls.loadedWeeks?.includes(week) ? 'loaded' : 'missing'}</Badge>)}
@@ -1076,7 +1076,7 @@ export default function Processing() {
             {division3 && division3Data?.unresolvedCount > 0 && summary.providersExpected > 0 && <Alert tone="warn">Match the ADA and GoLink drivers that need review above before processing.</Alert>}
             {division3 && division3Data?.fareReconciliation?.pendingCount > 0 && <Alert tone="warn">{division3Data.fareReconciliation.pendingCount} ADA fare driver/day row(s) are pending NSM collection details. They are accepted for processing but will keep affected VDPs in review.</Alert>}
             {division3 && summary.providersExpected === 0 && <Alert tone="info">DIV 3 files are validated and staged. Add the Compass DIV 3 provider roster before calculating provider VDPs.</Alert>}
-            {requirements.tollsRequired && !uberTolls?.ready && <Alert tone="warn">Upload a valid Uber toll reimbursement CSV for both weeks first.</Alert>}
+            {requirements.tollsRequired && !uberTolls?.ready && <Alert tone="warn">Upload a valid Uber toll reimbursement file for both weeks first.</Alert>}
             {v.stale > 0 && <Alert tone="warn">{v.stale} VDP(s) have changed inputs since they were calculated. Re-process to update them.</Alert>}
             {processError && <ErrorAlert error={processError} />}
             {canProcess && !v.stale && !processError && <p className="muted small">{v.total ? `${v.total} VDPs: ${v.NEEDS_REVIEW} need review and ${v.READY} are ready.` : 'Validation passed. Ready to process.'}</p>}
