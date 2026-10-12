@@ -38,10 +38,19 @@ export default function Vdps() {
 
   const cleanReady = useMemo(() => rows.filter((row) => row.status === 'READY' && !row.stale), [rows]);
   const exceptionRows = useMemo(() => rows.filter((row) => ['NEEDS_REVIEW', 'DISPUTED'].includes(row.status)), [rows]);
+  const cleanReadyIds = useMemo(() => cleanReady.map((row) => String(row._id)), [cleanReady]);
+  const selectedReadyCount = cleanReadyIds.filter((id) => selected.has(id)).length;
+  const allCleanReadySelected = cleanReadyIds.length > 0 && selectedReadyCount === cleanReadyIds.length;
   const choose = (id) => setParams((current) => { current.set('selected', id); return current; });
   const toggle = (id) => setSelected((current) => {
     const next = new Set(current);
     if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleAllReady = () => setSelected((current) => {
+    const next = new Set(current);
+    if (allCleanReadySelected) cleanReadyIds.forEach((id) => next.delete(id));
+    else cleanReadyIds.forEach((id) => next.add(id));
     return next;
   });
   const approveSelected = async () => {
@@ -79,7 +88,7 @@ export default function Vdps() {
   return (
     <div className="page page-wide">
       <PageHead title="VDPs" sub="One queue for exceptions, approval, processed statements, payment, and history."
-        actions={<div className="actions"><button className="btn" disabled={!exceptionRows.length} onClick={nextException}>Next exception <span className="muted">N</span></button><button className="btn btn-success" disabled={busy || ![...selected].some((id) => cleanReady.some((row) => String(row._id) === String(id)))} onClick={approveSelected}>Approve selected clean VDPs</button></div>} />
+        actions={<div className="actions"><button className="btn" disabled={!exceptionRows.length} onClick={nextException}>Next exception <span className="muted">N</span></button><button className="btn btn-success" disabled={busy || selectedReadyCount === 0} onClick={approveSelected}>{busy ? 'Approving…' : `Approve selected${selectedReadyCount ? ` (${selectedReadyCount})` : ''}`}</button></div>} />
       <div className="filters" style={{ marginBottom: 16 }}>
         <div className="field"><label htmlFor="vdp-status">Queue</label><select id="vdp-status" value={status} onChange={(e) => setParams((current) => { if (e.target.value) current.set('status', e.target.value); else current.delete('status'); current.delete('selected'); return current; })}><option value="">All VDPs</option>{Object.entries(VDP_STATUS).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select></div>
         <span className="muted small">↑/↓ moves through the queue · N opens the next exception</span>
@@ -88,6 +97,13 @@ export default function Vdps() {
       {loading ? <Loading /> : !rows.length ? <Empty title="No VDPs in this queue">Process a cycle or change the queue filter.</Empty> : (
         <div className="vdp-workbench">
           <section className="vdp-queue card" aria-label="VDP queue">
+            <div className="vdp-queue-toolbar">
+              <label className="check">
+                <input type="checkbox" aria-label="Select all clean VDPs ready for approval" checked={allCleanReadySelected} disabled={!cleanReadyIds.length || busy} onChange={toggleAllReady} />
+                Select all ready for approval
+              </label>
+              <span className="muted small">{selectedReadyCount} of {cleanReadyIds.length} selected</span>
+            </div>
             {rows.map((row) => <div key={row._id} className={`vdp-queue-row ${String(row._id) === selectedId ? 'selected' : ''}`} onClick={() => choose(row._id)}>
               <input aria-label={`Select ${row.provider?.name}`} type="checkbox" checked={selected.has(String(row._id))} disabled={row.status !== 'READY' || row.stale} onChange={(e) => { e.stopPropagation(); toggle(String(row._id)); }} onClick={(e) => e.stopPropagation()} />
               <div className="grow"><strong>{row.provider?.name || 'Provider'}</strong><div className="muted small">{row.planName || 'No plan'} · {row.cycle ? `${date(row.cycle.cycleStart)}–${date(row.cycle.cycleEnd)}` : ''}</div></div>

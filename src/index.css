@@ -98,6 +98,7 @@ p { margin: 0; }
 .run-progress { display: flex; align-items: center; justify-content: flex-end; gap: 12px; color: var(--text-3); text-transform: capitalize; }
 .vdp-workbench { display: grid; grid-template-columns: minmax(520px, 1.2fr) minmax(360px, .8fr); gap: 16px; align-items: start; }
 .vdp-queue { max-height: calc(100vh - 190px); overflow: auto; }
+.vdp-queue-toolbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 14px; background: var(--surface-2); border-bottom: 1px solid var(--border-strong); }
 .vdp-queue-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .vdp-queue-row:last-child { border-bottom: 0; }
 .vdp-queue-row:hover { background: var(--surface-2); }
