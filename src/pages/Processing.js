@@ -6,6 +6,8 @@ import {
   Alert, Badge, Card, CYCLE_STATUS, Empty, ErrorAlert, Field, Loading, Modal, PageHead, Stat, StatusBadge, useLoad, useToast, VDP_STATUS,
 } from '../components/ui';
 import { useDivisionCycle } from '../components/selection';
+import { useAuth } from '../App';
+import CompassPerformanceCard from '../components/CompassPerformanceCard';
 
 const divisionNumberKey = (value) => String(value || '').trim().toUpperCase().replace(/\s+/g, '');
 const isDivision3Division = (division) => ['3', '3GL'].includes(divisionNumberKey(division?.divisionNumber));
@@ -627,7 +629,7 @@ function RouteRow({ m, providers, importId, onResolved }) {
         {error && <div className="small" style={{ color: 'var(--bad)' }}>{error.message}</div>}
       </td>
       <td className="num">
-        {needs ? (
+        {m.compass && needs ? <a className="btn btn-sm" href="#compass-performance">Review Compass records</a> : needs ? (
           <div className="actions" style={{ justifyContent: 'flex-end' }}>
             <select aria-label={`Provider for route ${m.route}`} style={{ width: 200 }} value={providerId} onChange={(e) => setProviderId(e.target.value)}>
               <option value="">Choose provider…</option>
@@ -754,6 +756,10 @@ function PipelineNav({ step, enabled, onSelect }) {
 
 export default function Processing() {
   const sel = useDivisionCycle();
+  const { user } = useAuth();
+  const canEditPerformance = ['ADMIN', 'ACCOUNTING', 'USER'].includes(user?.role);
+  const openedPeriod = useRef(null);
+  const [openingPeriod, setOpeningPeriod] = useState(false);
   const processingGroupsLoad = useLoad(() => api.get('/settings/processing-groups'), []);
   const processingGroups = processingGroupsLoad.data || [];
   const toast = useToast();
@@ -854,7 +860,7 @@ export default function Processing() {
     sel.setCycleId(resumable._id);
     setStep(2);
     // Resume only cycles whose status proves that data was already staged or
-    // processed. OPEN/UPCOMING cycles still use source dates for detection.
+    // processed. Other periods can be selected explicitly or detected from source dates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startFresh, cycleId, sel.cyclesLoading, sel.cycleId, sel.cycles, selectedDivision?._id]);
 
@@ -864,10 +870,8 @@ export default function Processing() {
     setStartFresh(false);
     setCycleId(id);
     sel.setCycleId(id);
-    api.post('/processing-runs', { cycleId: id }).then((run) => {
-      setRunId(run._id);
-      setParams((current) => { current.set('divisionId', selectedDivision?._id || ''); current.set('cycleId', id); current.set('runId', run._id); return current; }, { replace: true });
-    }).catch(setProcessError);
+    setRunId('');
+    setParams((current) => { current.set('divisionId', selectedDivision?._id || ''); current.set('cycleId', id); current.delete('runId'); return current; }, { replace: true });
     refresh();
     if (message) toast(message);
   };
@@ -938,17 +942,25 @@ export default function Processing() {
     : !requirements.uberRequired);
   const division3Ready = !division3 || summary?.providersExpected === 0 || division3Data?.requiredReady;
   const sourceProcessingReady = !requirements?.divisionSourcesRequired || divisionSources?.processingSupported;
-  const canProcess = requiredDataLoaded && standardReady && uberReady && additionalDataReady && division3Ready && sourceProcessingReady;
+  const canProcess = requiredDataLoaded && standardReady && uberReady && additionalDataReady && division3Ready && sourceProcessingReady && !openingPeriod && !summary?.compassPerformance?.refreshing && !summary?.compassPerformance?.conflictCount;
   const processed = Boolean(v?.calculated);
   const enabledSteps = [true, selectedDivisionIds.length > 0, requiredDataLoaded, requiredDataLoaded && additionalDataReady, processed];
 
   useEffect(() => {
-    if (!cycleId || runId) return;
-    api.post('/processing-runs', { cycleId }).then((run) => {
+    if (!cycleId || !canEditPerformance) { setOpeningPeriod(false); return; }
+    if (openedPeriod.current?.cycleId !== cycleId) {
+      openedPeriod.current = { cycleId, request: api.post('/processing-runs', { cycleId }) };
+    }
+    let alive = true;
+    setOpeningPeriod(true);
+    openedPeriod.current.request.then((run) => {
+      if (!alive) return;
       setRunId(run._id);
       setParams((current) => { current.set('cycleId', cycleId); current.set('runId', run._id); return current; }, { replace: true });
-    }).catch(setProcessError);
-  }, [cycleId, runId, setParams]);
+      setRefreshKey((key) => key + 1);
+    }).catch((e) => { if (alive) setProcessError(e); }).finally(() => { if (alive) setOpeningPeriod(false); });
+    return () => { alive = false; };
+  }, [cycleId, canEditPerformance, setParams]);
 
   useEffect(() => {
     const summaryDivisionId = summary?.division?._id;
@@ -965,7 +977,7 @@ export default function Processing() {
 
   const pageSub = summary
     ? <>{summaryDivisionLabel} · {cycleLabel(summary.cycle)} · payment {date(summary.cycle.paymentDate)} <StatusBadge status={summary.cycle.status} map={CYCLE_STATUS} /></>
-    : selectedDivision ? 'Upload the first core dataset and its dates will identify the VDP pay period.' : 'Start by selecting a division or saved processing group.';
+    : selectedDivision ? 'Choose a pay period to load Compass performance, then supply any remaining inputs.' : 'Start by selecting a division or saved processing group.';
 
   return (
     <div className="page">
@@ -996,6 +1008,13 @@ export default function Processing() {
             {selectedGroup && <Alert tone="info"><strong>{selectedGroup.name}:</strong> {division3 ? 'DIV 3 supplies the ADA roster and DIV 3GL supplies the GoLink roster. Uber weekly data is optional.' : 'These Compass divisions will share one VDP processing run while retaining their own rosters and plans.'}</Alert>}
             {selectedDivisions.length > 0 && <div className="explain"><strong>{selectedDivisions.map((division) => `DIV ${division.divisionNumber}`).join(' + ')}</strong><div className="muted small">{selectedDivisions.reduce((total, division) => total + Number(division.activeProviders || 0), 0)} active provider(s) · {selectedDivisions.reduce((total, division) => total + Number(division.activePlans || 0), 0)} active VDP plan(s)</div></div>}
             {sel.cyclesLoading && <Loading text="Checking generated VDP periods…" />}
+            {selectedDivision && !sel.cyclesLoading && sel.cycles.length > 0 && <Field label="Pay period" htmlFor="processing-period">
+              <select id="processing-period" value={cycleId} disabled={openingPeriod} onChange={(event) => {
+                if (event.target.value) detectedCycle(event.target.value);
+                else { setCycleId(''); setRunId(''); sel.setCycleId(''); setStartFresh(true); setParams((current) => { current.delete('cycleId'); current.delete('runId'); return current; }); }
+              }}><option value="">Choose a pay period…</option>{sel.cycles.map((cycle) => <option key={cycle._id} value={cycle._id}>{cycleLabel(cycle)} · {cycle.status}</option>)}</select>
+            </Field>}
+            {openingPeriod && <Loading text="Opening pay period and loading Compass performance…" />}
             {!sel.cyclesLoading && !sel.cycles.length && selectedDivision && <Alert tone="info" action={<Link className="btn btn-sm" to="/cycles">Go to Cycles</Link>}>This division has no generated VDP periods. Generate periods before uploading data.</Alert>}
           </div>}
         </Card>
@@ -1004,7 +1023,8 @@ export default function Processing() {
       {selectedDivision && (
         <section id="processing-section-2" className="processing-section stack">
           <h2>2. Required data</h2>
-          {!summary && <Alert tone="info">Upload the first core dataset for DIV {selectedDivision.divisionNumber}. Its source dates will select the matching generated VDP period automatically. After that, this step will show the exact remaining requirements for that period.</Alert>}
+          {cycleId && <CompassPerformanceCard key={cycleId} cycleId={cycleId} revision={`${summary?.compassPerformance?.revision || 0}:${openingPeriod}`} onChanged={refresh} />}
+            {!summary && <Alert tone="info">Choose a pay period above to load Compass performance and see its remaining requirements. You can also upload a core dataset to identify the period from its dates.</Alert>}
           {loading && cycleId ? <Loading text="Loading identified VDP period…" /> : !summary ? <>
             {division3 && <>
               <Division3UploadCard kind="DIV3_ADA" division={selectedDivision} onChanged={division3Changed} />
@@ -1021,7 +1041,9 @@ export default function Processing() {
             {division3 ? <>
               <Division3UploadCard kind="DIV3_ADA" summary={summary} division={selectedDivision} onChanged={division3Changed} />
               <Division3UploadCard kind="DIV3_GOLINK" summary={summary} division={selectedDivision} onChanged={division3Changed} />
-            </> : requiredSourceDatasets.map((dataset) => <DivisionSourceUploadCard key={dataset.id} dataset={dataset} summary={summary} division={selectedDivision} onChanged={divisionSourceChanged} />)}
+            </> : requiredSourceDatasets.map((dataset) => dataset.satisfiedBy === 'COMPASS'
+              ? <Card key={dataset.id} title={dataset.title}><Alert tone="ok">Required performance inputs are supplied by Compass. No upload is needed.</Alert><details><summary>Upload fallback data</summary><DivisionSourceUploadCard dataset={dataset} summary={summary} division={selectedDivision} onChanged={divisionSourceChanged} /></details></Card>
+              : <DivisionSourceUploadCard key={dataset.id} dataset={dataset} summary={summary} division={selectedDivision} onChanged={divisionSourceChanged} />)}
             {(requirements.uberRequired || division3) && <UberUploadCard summary={summary} division={selectedDivision} onChanged={uberChanged} showMatching={false} />}
             {!division3 && !requirements.divisionSourcesRequired && !requirements.uberRequired && <Alert tone="warn"><strong>No source-file contract is configured for this division.</strong> Processing remains disabled until representative raw files define the accepted schemas.</Alert>}
           </>}
@@ -1051,7 +1073,7 @@ export default function Processing() {
           <h2>4. Validation & processing</h2>
           <div className="grid grid-3">
             <Stat label="Providers expected" value={summary.providersExpected} note="Active providers in division" />
-            <Stat label="Required datasets" value={requiredDataLoaded && additionalDataReady ? 'Uploaded' : 'Missing'} tone={requiredDataLoaded && additionalDataReady ? 'ok' : 'bad'} note={division3 ? 'ADA · GoLink · ADA fare (Uber optional)' : requirements.divisionSourcesRequired ? `${sourceDatasets.filter((dataset) => dataset.required).length} division-specific dataset(s)` : `${requirements.uberProviderCount} Uber provider(s)`} />
+            <Stat label="Required inputs" value={requiredDataLoaded && additionalDataReady ? 'Ready' : 'Missing'} tone={requiredDataLoaded && additionalDataReady ? 'ok' : 'bad'} note={division3 ? 'ADA · GoLink · ADA fare (Uber optional)' : requirements.divisionSourcesRequired ? `${sourceDatasets.filter((dataset) => dataset.required).length} division-specific dataset(s)` : `${requirements.uberProviderCount} Uber provider(s)`} />
             <Stat label="Validation" value={canProcess ? 'Ready' : requirements.divisionSourcesRequired && divisionSources?.ready ? 'Files validated' : 'Needs attention'} tone={canProcess || (requirements.divisionSourcesRequired && divisionSources?.ready) ? 'ok' : 'bad'} note={division3 ? `${division3Data?.unresolvedCount || 0} ADA/GoLink driver · ${uber?.unresolvedCount || 0} Uber driver issue(s)` : requirements.divisionSourcesRequired ? 'Every upload was checked against its exact source schema' : `${uber?.unresolvedCount || 0} driver · ${uberTolls?.missingWeeks?.length || 0} toll week issue(s)`} />
           </div>
           {division3 ? <Division3MatchingCard summary={summary} onChanged={reload} /> : (requirements.standardPerformanceRequired || sourceRoutesRequired) && perf?.loaded && <RoutesCard summary={summary} onChanged={reload} />}
